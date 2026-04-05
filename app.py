@@ -1,6 +1,6 @@
 """
 AI Video Generator — Flask Web App
-Modern motion-graphics style with per-word font detection (no boxes), small subtitles.
+Interactive motion-graphics style: full-screen text, karaoke highlight, no empty space.
 """
 
 import os, math, random, subprocess, threading, uuid, asyncio, re, textwrap, json
@@ -31,17 +31,24 @@ def job_get(job_id):
     return None
 
 # ── Colours ───────────────────────────────────────────────────────────────────
-BG   = (8, 8, 24)
-C1   = (0, 201, 255)
-C2   = (100, 255, 150)
-C3   = (255, 100, 120)
-C4   = (255, 210, 60)
-C5   = (180, 130, 255)
-W_C  = (255, 255, 255)
-GRAY = (80, 90, 120)
-SCENE_COLORS = [C1, C4, C2, C3, C5, (255, 140, 100), C2, C3, C1, C4]
+BG   = (6, 6, 20)
+C1   = (0, 210, 255)
+C2   = (80, 255, 140)
+C3   = (255, 80, 110)
+C4   = (255, 205, 50)
+C5   = (180, 120, 255)
+C6   = (255, 140, 60)
+W_C  = (240, 245, 255)
+GRAY = (70, 80, 110)
+SCENE_COLORS = [C1, C4, C2, C3, C5, C6, C2, C1, C4, C3]
 
 W, H, FPS = 640, 360, 8
+
+# Layout zones
+TOP_H  = 30    # top bar
+BOT_H  = 38    # subtitle strip
+CHAR_W = 148   # left column for character
+PANEL_X = CHAR_W + 4
 
 LANGUAGES = {
     "English (US)":  "en-US-JennyNeural",
@@ -58,22 +65,43 @@ LANGUAGES = {
     "Portuguese":    "pt-BR-FranciscaNeural",
 }
 
-# ── Fonts — per-character script detection ────────────────────────────────────
+# ── Font system — per-word script detection, CJK via system font ──────────────
 _FONTS_DIR  = BASE_DIR / "fonts"
 _FONT_CACHE = {}
+
+def _find_system_font(query):
+    try:
+        r = subprocess.run(['fc-match', query, '--format=%{file}'],
+                           capture_output=True, text=True, timeout=5)
+        p = r.stdout.strip()
+        if r.returncode == 0 and p and os.path.exists(p):
+            return p
+    except Exception:
+        pass
+    return None
+
+# Detect CJK font once at startup
+_CJK_FONT = (
+    _find_system_font('NotoSansCJK:lang=zh') or
+    _find_system_font(':lang=zh') or
+    _find_system_font(':lang=ja') or
+    ''
+)
 
 _SCRIPT_FONTS = [
     (0x0B80, 0x0BFF, 'NotoSansTamil-Regular.ttf',     'NotoSansTamil-Bold.ttf'),
     (0x0900, 0x097F, 'NotoSansDevanagari-Regular.ttf', 'NotoSansDevanagari-Bold.ttf'),
     (0x0C00, 0x0C7F, 'NotoSansTelugu-Regular.ttf',     'NotoSans-Bold.ttf'),
     (0x0600, 0x06FF, 'NotoSansArabic-Regular.ttf',     'NotoSans-Bold.ttf'),
-    (0x3040, 0x30FF, 'NotoSans-Regular.ttf',           'NotoSans-Bold.ttf'),  # Japanese kana
-    (0x4E00, 0x9FFF, 'NotoSans-Regular.ttf',           'NotoSans-Bold.ttf'),  # CJK
 ]
 
 def _script_files(text):
     for ch in text:
         cp = ord(ch)
+        # CJK (Chinese, Japanese, Korean)
+        if (0x3040 <= cp <= 0x30FF or 0x4E00 <= cp <= 0x9FFF or 0xAC00 <= cp <= 0xD7AF):
+            if _CJK_FONT:
+                return _CJK_FONT, _CJK_FONT
         for lo, hi, reg, bld in _SCRIPT_FONTS:
             if lo <= cp <= hi:
                 return reg, bld
@@ -82,84 +110,76 @@ def _script_files(text):
 def font(size, bold=False, text=''):
     reg, bld = _script_files(text) if text else ('NotoSans-Regular.ttf', 'NotoSans-Bold.ttf')
     fname = bld if bold else reg
-    key = (fname, size)
+    fpath = fname if os.path.isabs(fname) else str(_FONTS_DIR / fname)
+    key = (fpath, size)
     if key not in _FONT_CACHE:
-        try:    _FONT_CACHE[key] = ImageFont.truetype(str(_FONTS_DIR / fname), size)
+        try:    _FONT_CACHE[key] = ImageFont.truetype(fpath, size)
         except: _FONT_CACHE[key] = ImageFont.load_default()
     return _FONT_CACHE[key]
 
-def set_render_lang(voice):
+def set_render_lang(_voice):
     global _FONT_CACHE
     _FONT_CACHE = {}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def ease_out(t):    return 1 - (1 - max(0.0, min(1.0, t))) ** 3
-def ease_in_out(t): t = max(0.0, min(1.0, t)); return t * t * (3 - 2 * t)
-def blend(base, col, a): return tuple(int(b*(1-a)+c*a) for b, c in zip(base, col))
-def rrect(draw, box, r=10, fill=None, outline=None, w=1):
-    draw.rounded_rectangle(box, radius=r, fill=fill, outline=outline, width=w)
+def ease_out(t):     return 1 - (1 - max(0.0, min(1.0, t))) ** 3
+def ease_in_out(t):  t = max(0.0, min(1.0, t)); return t*t*(3-2*t)
+def blend(b, c, a):  return tuple(int(x*(1-a)+y*a) for x, y in zip(b, c))
+def rrect(d, box, r=8, fill=None, outline=None, w=1):
+    d.rounded_rectangle(box, radius=r, fill=fill, outline=outline, width=w)
 
-def _word_w(f, word):
-    try:    return int(f.getlength(word))
+def _ww(f, word):
+    try:    return max(1, int(f.getlength(word)))
     except: bb = f.getbbox(word); return (bb[2]-bb[0]) if bb else 8
 
-# ── Per-word mixed-script renderer (eliminates boxes in all languages) ────────
-def draw_mixed(draw, xy, text, size, bold=False, fill=W_C, anchor=None, shadow=False, max_px=None):
-    """Render text word-by-word choosing correct font per word — no boxes."""
+def draw_mixed(draw, xy, text, sz, bold=False, fill=W_C, anchor=None,
+               shadow=False, max_px=None):
+    """Word-by-word rendering — each word uses its correct script font."""
     if not text or not text.strip(): return
     words = text.split()
     if not words: return
-
-    sp_w = _word_w(font(size, bold), ' ')
-    parts = [(w, font(size, bold, text=w), _word_w(font(size, bold, text=w), w)) for w in words]
-    total_w = sum(pw for _, _, pw in parts) + sp_w * max(0, len(parts) - 1)
-
-    # Truncate if wider than max_px
-    if max_px and total_w > max_px:
-        trimmed, tw = [], 0
-        for w, wf, pw in parts:
-            if tw + pw > max_px - 20: break
-            trimmed.append((w, wf, pw)); tw += pw + sp_w
+    sp = _ww(font(sz, bold), ' ')
+    parts = [(w, font(sz, bold, text=w), _ww(font(sz, bold, text=w), w)) for w in words]
+    tw = sum(pw for _, _, pw in parts) + sp * max(0, len(parts)-1)
+    if max_px and tw > max_px:
+        trimmed, acc = [], 0
+        for item in parts:
+            if acc + item[2] > max_px - 16: break
+            trimmed.append(item); acc += item[2] + sp
         parts = trimmed
-        total_w = sum(pw for _, _, pw in parts) + sp_w * max(0, len(parts)-1)
-
+        tw = sum(pw for _, _, pw in parts) + sp * max(0, len(parts)-1)
     x, y = xy
-    if anchor == "mm":
-        x -= total_w // 2
-        y -= size // 2
-    elif anchor == "rm":
-        x -= total_w
-    elif anchor == "lm":
-        y -= size // 2
-
-    for i, (word, wf, pw) in enumerate(parts):
-        if shadow:
-            draw.text((x+1, y+1), word, font=wf, fill=(0, 0, 0))
-        draw.text((x, y), word, font=wf, fill=fill)
-        x += pw + (sp_w if i < len(parts)-1 else 0)
+    if anchor == "mm": x -= tw//2; y -= sz//2
+    elif anchor == "rm": x -= tw
+    elif anchor == "lm": y -= sz//2
+    for i, (w, wf, pw) in enumerate(parts):
+        if shadow: draw.text((x+1, y+1), w, font=wf, fill=(0,0,0))
+        draw.text((x, y), w, font=wf, fill=fill)
+        x += pw + (sp if i < len(parts)-1 else 0)
 
 # ── Background ────────────────────────────────────────────────────────────────
-def draw_grid(draw, color):
-    gc = blend(BG, color, 0.06)
-    for x in range(0, W+1, 40):
-        draw.line([(x, 0), (x, H)], fill=gc, width=1)
-    for y in range(0, H+1, 40):
-        draw.line([(0, y), (W, y)], fill=gc, width=1)
-
 def make_particles():
     random.seed(42)
-    return [dict(
-        x=random.uniform(0, W), y=random.uniform(0, H),
-        vx=random.uniform(-0.3, 0.3), vy=random.uniform(-0.3, 0.3),
-        r=random.uniform(1, 2.5), col=random.choice([C1, C2, C3, C4, C5]),
-        a=random.uniform(0.06, 0.2)
-    ) for _ in range(28)]
+    return [dict(x=random.uniform(0,W), y=random.uniform(0,H),
+                 vx=random.uniform(-0.3,0.3), vy=random.uniform(-0.3,0.3),
+                 r=random.uniform(1,3), col=random.choice([C1,C2,C3,C4,C5]),
+                 a=random.uniform(0.05,0.18)) for _ in range(35)]
 
-def draw_particles(img, particles):
+def draw_bg(img, particles, color):
     d = ImageDraw.Draw(img)
+    # Grid
+    gc = blend(BG, color, 0.07)
+    for x in range(0, W+1, 40): d.line([(x,0),(x,H)], fill=gc, width=1)
+    for y in range(0, H+1, 40): d.line([(0,y),(W,y)], fill=gc, width=1)
+    # Diagonal accent lines (top-left corner decoration)
+    ac = blend(BG, color, 0.1)
+    for i in range(4):
+        off = 30 + i*20
+        d.line([(0, off), (off, 0)], fill=ac, width=1)
+    # Moving particles
     for p in particles:
-        p['x'] = (p['x'] + p['vx']) % W
-        p['y'] = (p['y'] + p['vy']) % H
+        p['x'] = (p['x']+p['vx']) % W
+        p['y'] = (p['y']+p['vy']) % H
         c = blend(BG, p['col'], p['a'])
         r = max(1, int(p['r']))
         d.ellipse([p['x']-r, p['y']-r, p['x']+r, p['y']+r], fill=c)
@@ -167,165 +187,232 @@ def draw_particles(img, particles):
 # ── Character ─────────────────────────────────────────────────────────────────
 def draw_character(draw, x, y, t, color=C2, scale=1.0, action="talk"):
     s = scale
-    bounce = math.sin(t * math.pi * 2) * 4 * s
-    body_top = y - int(60*s) + int(bounce)
-    body_bot = y + int(10*s) + int(bounce)
-    head_y   = y - int(85*s) + int(bounce)
-    head_r   = int(28*s)
+    bounce  = math.sin(t * math.pi * 2) * 4 * s
+    b_top   = y - int(60*s) + int(bounce)
+    b_bot   = y + int(10*s) + int(bounce)
+    head_y  = y - int(85*s) + int(bounce)
+    head_r  = int(28*s)
+    # Aura / glow ring
+    draw.ellipse([x-int(45*s), b_top-int(10*s), x+int(45*s), b_bot+int(20*s)],
+                 fill=blend(BG, color, 0.07))
     # Shadow
     draw.ellipse([x-int(35*s), y+int(12*s), x+int(35*s), y+int(22*s)],
-                 fill=blend(BG, (50, 50, 80), 0.7))
-    # Glow ring
-    rrect(draw, [x-int(25*s), body_top-2, x+int(25*s), body_bot+2], r=10,
-          fill=None, outline=blend(BG, color, 0.3), w=2)
+                 fill=blend(BG, (50,50,80), 0.6))
     # Body
-    rrect(draw, [x-int(22*s), body_top, x+int(22*s), body_bot], r=8,
+    rrect(draw, [x-int(22*s), b_top, x+int(22*s), b_bot], r=8,
           fill=color, outline=blend(color, W_C, 0.3), w=2)
     # Head
-    head_col = (255, 220, 177)
+    hc = (255, 220, 177)
     draw.ellipse([x-head_r, head_y-head_r, x+head_r, head_y+head_r],
-                 fill=head_col, outline=blend(head_col, W_C, 0.2), width=2)
+                 fill=hc, outline=blend(hc, W_C, 0.2), width=2)
     # Eyes
-    eye_blink = abs(math.sin(t * math.pi * 0.4)) > 0.95
-    eye_h = 3 if eye_blink else int(6*s)
+    blink = abs(math.sin(t * math.pi * 0.4)) > 0.95
+    ey_h = 3 if blink else int(6*s)
     for ex in [x-int(10*s), x+int(10*s)]:
         draw.ellipse([ex-int(5*s), head_y-int(8*s),
-                      ex+int(5*s), head_y-int(8*s)+eye_h], fill=(40, 40, 60))
+                      ex+int(5*s), head_y-int(8*s)+ey_h], fill=(40,40,60))
     # Mouth
     if action == "talk":
-        mo = abs(math.sin(t * math.pi * 5)) * int(9*s)
+        mo = abs(math.sin(t*math.pi*5)) * int(8*s)
         draw.arc([x-int(12*s), head_y+int(4*s), x+int(12*s), head_y+int(14*s)+mo],
-                 0, 180, fill=(180, 80, 80), width=int(3*s))
+                 0, 180, fill=(180,80,80), width=int(3*s))
     else:
         draw.arc([x-int(12*s), head_y+int(4*s), x+int(12*s), head_y+int(16*s)],
-                 0, 180, fill=(180, 80, 80), width=int(3*s))
+                 0, 180, fill=(180,80,80), width=int(3*s))
     # Hair
     draw.arc([x-head_r, head_y-head_r, x+head_r, head_y+int(5*s)],
-             200, 340, fill=(80, 50, 20), width=int(8*s))
+             200, 340, fill=(80,50,20), width=int(8*s))
     # Arms
-    arm_angle = math.sin(t * math.pi * 1.5) * 0.2
-    r_arm = (x+int(45*s), body_top+int(40*s)+int(bounce))
-    draw.line([x+int(20*s), body_top+int(15*s), r_arm[0], r_arm[1]],
-              fill=head_col, width=int(8*s))
-    l_arm = (x-int((30+30*math.cos(arm_angle))*s),
-             body_top+int(15*s)-int(30*math.sin(arm_angle)*s)+int(bounce))
-    draw.line([x-int(20*s), body_top+int(15*s), l_arm[0], l_arm[1]],
-              fill=head_col, width=int(8*s))
+    arm = math.sin(t*math.pi*1.5)*0.2
+    draw.line([x+int(20*s), b_top+int(15*s),
+               x+int(45*s), b_top+int(40*s)+int(bounce)],
+              fill=hc, width=int(8*s))
+    draw.line([x-int(20*s), b_top+int(15*s),
+               x-int((30+30*math.cos(arm))*s),
+               b_top+int(15*s)-int(30*math.sin(arm)*s)+int(bounce)],
+              fill=hc, width=int(8*s))
     # Legs
     for sign in [-1, 1]:
         lx = x + sign*int(12*s)
-        draw.line([lx, body_bot, lx, y+int(55*s)+int(bounce)],
-                  fill=blend(color, (30, 30, 60), 0.4), width=int(12*s))
+        draw.line([lx, b_bot, lx, y+int(55*s)+int(bounce)],
+                  fill=blend(color,(30,30,60),0.4), width=int(12*s))
         draw.ellipse([lx-int(12*s), y+int(50*s)+int(bounce),
-                      lx+int(12*s), y+int(63*s)+int(bounce)], fill=(40, 40, 60))
+                      lx+int(12*s), y+int(63*s)+int(bounce)], fill=(40,40,60))
 
-# ── Subtitle — compact bottom pill with small font ────────────────────────────
-def draw_subtitle(draw, text, p, color):
-    """Small subtitle pill at bottom — font 10px, 2 lines max, word-by-word."""
-    words = text.split()
-    if not words: return
-    n_visible = max(1, int(len(words) * min(p * 1.4, 1.0)))
-    visible = ' '.join(words[:n_visible])
-    lines = textwrap.wrap(visible, 80)[:2]
-    if not lines: return
-
-    SZ  = 10          # ← small subtitle font
-    LH  = 14
-    PAD = 5
-    box_h = len(lines) * LH + PAD * 2
-    y1 = H - box_h - 5
-
-    # Pill background
-    rrect(draw, [5, y1, W-5, H-5], r=5, fill=(6, 6, 22))
-    # Color accent stripe
-    rrect(draw, [5, y1, 9, H-5], r=3, fill=blend(BG, color, 0.85))
-
-    for i, ln in enumerate(lines):
-        ty = y1 + PAD + i * LH
-        # Per-word rendering handles mixed scripts
-        xpos = 15
-        sp_f = font(SZ)
-        sp_w = _word_w(sp_f, ' ')
-        for j, w in enumerate(ln.split()):
-            wf = font(SZ, text=w)
-            draw.text((xpos+1, ty+1), w, font=wf, fill=(0, 0, 0))
-            draw.text((xpos,   ty),   w, font=wf, fill=W_C)
-            xpos += _word_w(wf, w) + (sp_w if j < len(ln.split())-1 else 0)
+def draw_sound_bars(draw, x, y, t, color, active):
+    """Animated equalizer bars — shows voice activity."""
+    if not active: return
+    for i in range(5):
+        bh = int(abs(math.sin(t*math.pi*4 + i*0.9)) * 10 + 3)
+        bx = x - 12 + i*6
+        draw.rectangle([bx, y-bh, bx+4, y], fill=blend(BG, color, 0.65))
 
 # ── Top bar ───────────────────────────────────────────────────────────────────
-def draw_top_bar(draw, topic, idx, total, color, bar_a):
-    draw.rectangle([0, 0, W, 28], fill=blend(BG, (18, 18, 42), 0.98))
-    draw.rectangle([0, 27, W, 28], fill=blend(BG, color, bar_a * 0.7))
-    # Topic title center
-    draw_mixed(draw, (W//2, 14), topic, 11, bold=True,
-               fill=blend(BG, W_C, bar_a * 0.95), anchor="mm",
-               max_px=W - 80)
-    # Scene counter badge (right)
-    badge = f"  {idx+1} / {total}  "
-    bw = _word_w(font(9, True), badge)
-    bx = W - 6 - bw
-    rrect(draw, [bx-2, 4, W-5, 24], r=5, fill=blend(BG, color, bar_a * 0.25))
-    draw_mixed(draw, (W-8, 14), f"{idx+1}/{total}", 9, bold=True,
-               fill=blend(BG, color, bar_a), anchor="rm")
+def draw_top_bar(draw, topic, idx, total, color, a):
+    draw.rectangle([0, 0, W, TOP_H], fill=blend(BG, (15,15,40), 0.98))
+    draw.rectangle([0, TOP_H-2, W, TOP_H], fill=blend(BG, color, a*0.7))
+    draw_mixed(draw, (W//2, TOP_H//2), topic, 11, bold=True,
+               fill=blend(BG, W_C, a*0.92), anchor="mm", max_px=W-90)
+    # Scene badge
+    btext = f"{idx+1} / {total}"
+    bw = _ww(font(9, True), btext) + 14
+    bx = W - 5 - bw
+    rrect(draw, [bx, 5, W-5, TOP_H-5], r=5,
+          fill=blend(BG, color, a*0.22))
+    draw_mixed(draw, (W-12, TOP_H//2), btext, 9, bold=True,
+               fill=blend(BG, color, a*0.9), anchor="rm")
 
-# ── Scene card (right panel) ──────────────────────────────────────────────────
-def draw_scene_card(draw, idx, name, p, color, total_scenes):
-    """Attractive right-side card: scene name, accent, dots."""
-    a = ease_out(min(p / 0.2, 1.0))
+# ── Left column: scene number + character + sound bars ───────────────────────
+def draw_left_column(draw, idx, p, t_anim, color):
+    a = ease_out(min(p / 0.15, 1.0))
     if a < 0.02: return
 
-    cx1, cy1, cx2, cy2 = 152, 34, W - 6, 298
+    # Large decorative scene number (fills upper-left)
+    cx, cy = CHAR_W // 2, TOP_H + 50
+    cr = 38
+    # Outer glow ring
+    draw.ellipse([cx-cr-4, cy-cr-4, cx+cr+4, cy+cr+4],
+                 fill=blend(BG, color, a*0.08))
+    # Ring border
+    draw.ellipse([cx-cr, cy-cr, cx+cr, cy+cr],
+                 fill=blend(BG, color, a*0.15),
+                 outline=blend(BG, color, a*0.5), width=2)
+    draw_mixed(draw, (cx, cy), str(idx+1), 30, bold=True,
+               fill=blend(BG, color, a*0.9), anchor="mm", shadow=False)
 
-    # Card bg + border
-    rrect(draw, [cx1, cy1, cx2, cy2], r=10,
-          fill=blend(BG, (22, 22, 52), a * 0.96),
-          outline=blend(BG, color, a * 0.45), w=1)
+    # Character (center-left, bigger scale)
+    char_a = ease_out(min((p-0.05)/0.2, 1.0))
+    if char_a > 0.04:
+        action = "talk" if 0.08 < p < 0.90 else "idle"
+        draw_character(draw, CHAR_W//2, 268, t_anim*2,
+                       color=color, scale=0.82*char_a, action=action)
+        # Sound bars just above subtitle
+        if action == "talk":
+            draw_sound_bars(draw, CHAR_W//2, H - BOT_H - 6, t_anim*3, color, True)
 
-    # Top accent bar inside card
-    rrect(draw, [cx1, cy1, cx2, cy1+3], r=2,
-          fill=blend(BG, color, a * 0.8))
+# ── Right panel: scene name + FULL karaoke text ───────────────────────────────
+def draw_narration_panel(draw, idx, name, narration, p, color, total_scenes):
+    """Full right panel with scene name + karaoke-style word highlight."""
+    a = ease_out(min(p / 0.18, 1.0))
+    if a < 0.02: return
 
-    # Chapter circle badge
-    bx, by = cx1 + 14, cy1 + 14
-    draw.ellipse([bx, by, bx+26, by+26],
-                 fill=blend(BG, color, a * 0.9))
-    draw_mixed(draw, (bx+13, by+13), str(idx+1), 10, bold=True,
+    px0 = PANEL_X
+    py0 = TOP_H + 4
+    px1 = W - 5
+    py1 = H - BOT_H - 5
+
+    # Panel card
+    rrect(draw, [px0, py0, px1, py1], r=10,
+          fill=blend(BG, (16, 16, 44), a*0.97),
+          outline=blend(BG, color, a*0.45), w=1)
+    # Top color bar
+    rrect(draw, [px0, py0, px1, py0+3], r=2,
+          fill=blend(BG, color, a*0.85))
+
+    inner_x = px0 + 12
+    inner_y = py0 + 10
+
+    # ── Scene name header ──────────────────────────────────────────────────
+    # Badge circle
+    draw.ellipse([inner_x, inner_y, inner_x+24, inner_y+24],
+                 fill=blend(BG, color, a*0.9))
+    draw_mixed(draw, (inner_x+12, inner_y+12), str(idx+1), 10, bold=True,
                fill=BG, anchor="mm", shadow=False)
 
-    # Scene name — large bold text
-    name_lines = textwrap.wrap(name, 20)[:2]
-    for li, nl in enumerate(name_lines):
-        ty = cy1 + 14 + li * 26
-        draw_mixed(draw, (bx+32, ty), nl, 17, bold=True,
-                   fill=blend(BG, W_C, a), max_px=cx2 - bx - 40)
+    # Scene name text
+    name_lines = textwrap.wrap(name, 22)[:1]
+    for nl in name_lines:
+        draw_mixed(draw, (inner_x+30, inner_y+2), nl, 15, bold=True,
+                   fill=blend(BG, W_C, a),
+                   max_px=px1 - inner_x - 38)
 
-    # Divider
-    dy = cy1 + 14 + len(name_lines) * 26 + 6
-    fill_w = int((cx2 - cx1 - 20) * a)
-    draw.rectangle([cx1+10, dy, cx1+10+fill_w, dy+1],
-                   fill=blend(BG, color, a * 0.6))
+    # Thin divider
+    div_y = inner_y + 30
+    dw = int((px1 - inner_x - 10) * min(a * 3, 1.0))
+    draw.rectangle([inner_x, div_y, inner_x + dw, div_y + 1],
+                   fill=blend(BG, color, a*0.55))
 
-    # Decorative circles (visual interest)
-    for ci in range(3):
-        cr = 18 - ci * 5
-        cx_c = cx2 - 20 - ci * 8
-        cy_c = cy1 + 18
-        draw.ellipse([cx_c-cr, cy_c-cr, cx_c+cr, cy_c+cr],
-                     fill=None, outline=blend(BG, color, a * (0.15 - ci*0.03)), width=1)
+    # ── Karaoke narration text ─────────────────────────────────────────────
+    words = narration.split()
+    n_total = len(words)
+    if n_total > 0:
+        n_shown = int(n_total * min(p * 1.25, 1.0))  # words revealed so far
 
-    # Scene progress dots
-    dot_y = cy2 - 14
+        TEXT_SZ  = 13
+        LINE_H   = 22
+        TEXT_Y0  = div_y + 9
+        TEXT_W   = px1 - inner_x - 14
+        CPL      = max(18, TEXT_W // 7)   # chars per line approx
+
+        lines = textwrap.wrap(narration, CPL)[:5]
+        word_cursor = 0
+
+        for li, line in enumerate(lines):
+            ty = TEXT_Y0 + li * LINE_H
+            if ty + LINE_H > py1 - 22: break
+            lwords = line.split()
+            xpos = inner_x
+            sp_f = font(TEXT_SZ)
+            sp_w = _ww(sp_f, ' ')
+
+            for wi, w in enumerate(lwords):
+                gidx = word_cursor + wi
+                is_current = (gidx == n_shown)
+                wf  = font(TEXT_SZ, bold=is_current, text=w)
+                wpx = _ww(wf, w)
+
+                if gidx < n_shown:
+                    # Already spoken — white
+                    wfill = blend(BG, W_C, a * 0.82)
+                elif is_current:
+                    # Current word — scene color + subtle highlight bg
+                    wfill = blend(BG, color, a)
+                    rrect(draw, [xpos-2, ty-2, xpos+wpx+3, ty+TEXT_SZ+3], r=3,
+                          fill=blend(BG, color, a*0.18))
+                else:
+                    # Future word — dimmed
+                    wfill = blend(BG, GRAY, a*0.55)
+
+                # Shadow + text
+                draw.text((xpos+1, ty+1), w, font=wf, fill=(0,0,0))
+                draw.text((xpos,   ty),   w, font=wf, fill=wfill)
+                xpos += wpx + sp_w
+
+            word_cursor += len(lwords)
+
+    # ── Scene progress dots ────────────────────────────────────────────────
+    dot_y = py1 - 13
     for si in range(min(total_scenes, 8)):
-        col_d = color if si == idx else GRAY
-        dot_a = a * (1.0 if si == idx else 0.45)
         r = 5 if si == idx else 3
-        dx = cx1 + 14 + si * 15
+        dx = inner_x + si * 14
         draw.ellipse([dx-r, dot_y-r, dx+r, dot_y+r],
-                     fill=blend(BG, col_d, dot_a))
+                     fill=blend(BG, color if si == idx else GRAY,
+                                a*(1.0 if si == idx else 0.4)))
 
-    # Narration preview line (small, below divider) — first 8 words
-    # This gives a "teaser" of what's being said
-    dy2 = dy + 6
+# ── Subtitle bar (small backup) ───────────────────────────────────────────────
+def draw_subtitle(draw, text, p, color):
+    """Tiny subtitle pill at bottom — 9px, backs up narration panel."""
+    words = text.split()
+    if not words: return
+    n = max(1, int(len(words) * min(p * 1.3, 1.0)))
+    visible = ' '.join(words[:n])
+    lines = textwrap.wrap(visible, 90)[:1]   # single line only
+    if not lines: return
+
+    SZ = 9
+    pad = 4
+    bh = SZ + pad * 2
+    y1 = H - bh - 3
+    rrect(draw, [4, y1, W-4, H-3], r=5, fill=(5, 5, 18))
+    rrect(draw, [4, y1, 7, H-3], r=3, fill=blend(BG, color, 0.85))
+
+    xpos = 12
+    sp_w = _ww(font(SZ), ' ')
+    for j, w in enumerate(lines[0].split()):
+        wf = font(SZ, text=w)
+        draw.text((xpos+1, y1+pad+1), w, font=wf, fill=(0,0,0))
+        draw.text((xpos,   y1+pad),   w, font=wf, fill=W_C)
+        xpos += _ww(wf, w) + (sp_w if j < len(lines[0].split())-1 else 0)
 
 # ── TTS ───────────────────────────────────────────────────────────────────────
 def generate_tts(text, voice, out_file):
@@ -368,21 +455,21 @@ def generate_video(job_id, topic, script, voice):
         scene_audios = []
         total_scenes = len(script)
 
-        # ── Step 1: TTS per scene ─────────────────────────────────────────────
+        # ── TTS per scene ─────────────────────────────────────────────────
         for i, scene in enumerate(script):
             af = f"/tmp/{job_id}_s{i}.mp3"
             generate_tts(scene['text'], voice, af)
             dur = get_audio_duration(af)
             scene['actual_duration'] = max(dur + 0.5, 3.0)
             scene_audios.append(af)
-            pct = 5 + int((i+1) / total_scenes * 20)
+            pct = 5 + int((i+1)/total_scenes * 20)
             job_set(job_id, progress=pct,
                     message=f'Voice {i+1}/{total_scenes}: {scene["name"]}')
 
         combined_audio = f"/tmp/{job_id}_audio.mp3"
         concat_audio(scene_audios, combined_audio)
 
-        # ── Step 2: Render frames ─────────────────────────────────────────────
+        # ── Render frames ─────────────────────────────────────────────────
         job_set(job_id, message='Rendering animation...', progress=26)
         total_frames = sum(int(s['actual_duration'] * FPS) for s in script)
         particles    = make_particles()
@@ -397,11 +484,9 @@ def generate_video(job_id, topic, script, voice):
             narration = scene['text']
             sf        = int(duration * FPS)
 
-            # Pre-render static bg (particles + grid only)
+            # Static background (particles + grid) — pre-rendered once
             static = Image.new("RGB", (W, H), BG)
-            draw_particles(static, particles)
-            sd = ImageDraw.Draw(static)
-            draw_grid(sd, color)
+            draw_bg(static, particles, color)
             static_arr = np.array(static)
 
             for fi in range(sf):
@@ -411,34 +496,23 @@ def generate_video(job_id, topic, script, voice):
                 img  = Image.fromarray(static_arr.copy())
                 draw = ImageDraw.Draw(img)
 
-                # Scene fade-in overlay (first 6% of scene)
-                fade = ease_in_out(min(p / 0.06, 1.0))
-
-                # UI elements
+                # UI layers
                 bar_a = ease_out(min(p / 0.12, 1.0))
                 draw_top_bar(draw, topic, idx, total_scenes, color, bar_a)
-                draw_scene_card(draw, idx, scene['name'], p, color, total_scenes)
-
-                # Character (left side)
-                char_a = ease_out(min((p - 0.04) / 0.18, 1.0))
-                if char_a > 0.05:
-                    action = "talk" if 0.08 < p < 0.88 else "idle"
-                    draw_character(draw, 78, 262, t_anim * 2,
-                                   color=color, scale=0.72 * char_a, action=action)
-
-                # Subtitle (small, bottom pill)
+                draw_left_column(draw, idx, p, t_anim, color)
+                draw_narration_panel(draw, idx, scene['name'], narration,
+                                     p, color, total_scenes)
                 draw_subtitle(draw, narration, min(p / 0.1, 1.0), color)
 
-                # Scene fade-in from black
+                # Scene fade-in from black (first ~5% of scene)
+                fade = ease_in_out(min(p / 0.055, 1.0))
                 if fade < 0.99:
-                    black = Image.new("RGB", (W, H), BG)
-                    img   = Image.blend(black, img, fade)
+                    img = Image.blend(Image.new("RGB", (W, H), BG), img, fade)
 
-                # Global progress bar — always on top, 3px
-                final = ImageDraw.Draw(img)
-                bw  = int(frame_n / max(total_frames, 1) * W)
-                progress_color = blend(C1, C2, frame_n / max(total_frames, 1))
-                final.rectangle([0, 0, bw, 3], fill=progress_color)
+                # Global progress bar — top 3px, always visible
+                fd = ImageDraw.Draw(img)
+                bw = int(frame_n / max(total_frames, 1) * W)
+                fd.rectangle([0, 0, bw, 3], fill=blend(C1, C2, frame_n/max(total_frames,1)))
 
                 writer.append_data(np.array(img))
                 frame_n += 1
@@ -450,7 +524,7 @@ def generate_video(job_id, topic, script, voice):
 
         writer.close()
 
-        # ── Step 3: Merge audio ───────────────────────────────────────────────
+        # ── Merge audio ───────────────────────────────────────────────────
         job_set(job_id, message='Merging audio + video...', progress=88)
         import imageio_ffmpeg
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
@@ -473,12 +547,12 @@ def generate_video(job_id, topic, script, voice):
         job_set(job_id, status='error', message=str(e))
         print(traceback.format_exc())
 
-
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route('/debug')
 def debug():
     files = [f.name for f in _FONTS_DIR.iterdir()] if _FONTS_DIR.exists() else []
-    return jsonify({'fonts_dir': str(_FONTS_DIR), 'files': sorted(files)})
+    return jsonify({'fonts_dir': str(_FONTS_DIR), 'files': sorted(files),
+                    'cjk_font': _CJK_FONT})
 
 @app.route('/')
 def index():
