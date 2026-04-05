@@ -41,7 +41,7 @@ GRAY = (136, 146, 176)
 CARD = (26, 26, 46)
 SCENE_COLORS = [C1, C4, C2, C3, (179,136,255), (255,138,101), C2, C3, C1, C4]
 
-W, H, FPS = 854, 480, 20   # 480p @ 20fps — fits Render free 512MB RAM
+W, H, FPS = 640, 360, 12   # 360p @ 12fps — fast render on free tier
 
 LANGUAGES = {
     "English (US)":     "en-US-JennyNeural",
@@ -75,11 +75,11 @@ def rrect(draw, box, r=10, fill=None, outline=None, w=2):
     draw.rounded_rectangle(box, radius=r, fill=fill, outline=outline, width=w)
 
 def make_particles():
-    random.seed(int(time.time()))
+    random.seed(42)
     return [dict(x=random.uniform(0,W), y=random.uniform(0,H),
-                 vx=random.uniform(-0.3,0.3), vy=random.uniform(-0.3,0.3),
-                 r=random.uniform(1,3), col=random.choice([C1,C2,C3,C4]),
-                 a=random.uniform(0.1,0.35)) for _ in range(55)]
+                 vx=random.uniform(-0.25,0.25), vy=random.uniform(-0.25,0.25),
+                 r=random.uniform(1,2), col=random.choice([C1,C2,C3,C4]),
+                 a=random.uniform(0.08,0.25)) for _ in range(22)]  # fewer = faster
 
 def draw_particles(img, particles):
     d = ImageDraw.Draw(img)
@@ -87,7 +87,7 @@ def draw_particles(img, particles):
         p['x'] = (p['x']+p['vx']) % W
         p['y'] = (p['y']+p['vy']) % H
         c = blend(BG, p['col'], p['a'])
-        r = int(p['r'])
+        r = max(1, int(p['r']))
         d.ellipse([p['x']-r, p['y']-r, p['x']+r, p['y']+r], fill=c)
 
 # ── Character ─────────────────────────────────────────────────────────────────
@@ -136,112 +136,61 @@ def draw_character(draw, x, y, t, color=C2, scale=1.0, action="talk"):
         draw.ellipse([lx-int(12*s), y+int(50*s)+int(bounce),
                       lx+int(12*s), y+int(63*s)+int(bounce)], fill=(40,40,60))
 
-# ── Subtitle renderer ─────────────────────────────────────────────────────────
+# ── Fast subtitle (no RGBA overlay — plain text with shadow) ──────────────────
 def draw_subtitle(draw, text, p, color):
-    """Render subtitle text at bottom; reveal progressively with p in [0,1]."""
-    max_w = 70  # chars per line
-    lines  = []
-    for raw in text.split('\n'):
-        lines += textwrap.wrap(raw, max_w) or ['']
-
-    # progressive reveal: show more words as p increases
-    all_words = text.split()
-    visible_count = max(1, int(len(all_words) * min(p * 1.4, 1.0)))
-    visible_text  = ' '.join(all_words[:visible_count])
-    vis_lines = textwrap.wrap(visible_text, max_w) or ['']
-
-    line_h = 34
-    box_h  = len(vis_lines) * line_h + 24
-    box_y1 = H - box_h - 10
-    box_y2 = H - 10
-
-    # semi-transparent backdrop
-    overlay = Image.new("RGBA", (W, H), (0,0,0,0))
-    od = ImageDraw.Draw(overlay)
-    od.rounded_rectangle([60, box_y1, W-60, box_y2], radius=10,
-                          fill=(0, 0, 0, 160))
-    img_rgba = img_from_draw(draw).convert("RGBA")
-    img_rgba.alpha_composite(overlay)
-    # paste back — we draw text after; keep reference
-    draw._image.paste(img_rgba.convert("RGB"))
-    draw = ImageDraw.Draw(draw._image)
-
-    # left accent bar
-    draw.rectangle([60, box_y1, 64, box_y2],
-                   fill=blend(BG, color, 0.9))
-
-    # text lines
-    f = font(22)
-    for i, line in enumerate(vis_lines):
-        ty = box_y1 + 12 + i * line_h
-        draw.text((80, ty), line, font=f, fill=W_C)
-
+    words   = text.split()
+    visible = ' '.join(words[:max(1, int(len(words)*min(p*1.5,1.0)))])
+    lines   = textwrap.wrap(visible, 45) or ['']
+    lh = 26
+    box_h = len(lines)*lh + 16
+    y1 = H - box_h - 6
+    # dark box (no RGBA — just draw a filled rect)
+    draw.rectangle([0, y1, W, H], fill=(0,0,18))
+    draw.rectangle([0, y1, 4, H], fill=color)
+    f = font(18)
+    for i, ln in enumerate(lines):
+        ty = y1 + 8 + i*lh
+        # shadow
+        draw.text((12, ty+1), ln, font=f, fill=(0,0,0))
+        draw.text((11, ty),   ln, font=f, fill=W_C)
     return draw
 
-def img_from_draw(draw):
-    return draw._image
-
-# ── On-screen content ─────────────────────────────────────────────────────────
+# ── On-screen content (fast flat layout) ─────────────────────────────────────
 def draw_content_panel(draw, idx, name, p, t_anim, color, topic, narration):
-    """Right panel: scene heading + animated visual content."""
-    fade = min(p/0.08, 1.0, (1-p)/0.06)
-    a    = ease_out(min((p-0.1)/0.2, 1)) * fade
-
-    # ── Top title bar ──
+    fade  = min(p/0.08, 1.0, (1-p)/0.06)
     bar_a = ease_out(min(p/0.12, 1)) * fade
-    rrect(draw, [0,0,W,58], r=0, fill=blend(BG,color,bar_a*0.22))
-    draw.text((W//2, 29), topic.upper(),
-              font=font(18,True), fill=blend(BG,color,bar_a), anchor="mm")
-    # chapter badge
-    badge_col = blend(BG, color, bar_a*0.8)
-    rrect(draw, [W-150,10,W-14,48], r=18, fill=blend(BG,CARD,bar_a*0.9),
-          outline=badge_col, w=1)
-    draw.text((W-82, 29), f"Ch {idx+1}", font=font(15,True),
-              fill=badge_col, anchor="mm")
 
-    # ── Character (left 26%) ──
-    cx = 165
+    # Top bar
+    draw.rectangle([0,0,W,44], fill=blend(BG, color, bar_a*0.25))
+    draw.text((W//2, 22), topic.upper(),
+              font=font(14,True), fill=blend(BG,color,bar_a), anchor="mm")
+    draw.text((W-8, 22), f"#{idx+1}",
+              font=font(13,True), fill=blend(BG,color,bar_a*0.7), anchor="rm")
+
+    # Character (left)
     char_a = ease_out(min((p-0.04)/0.18,1)) * fade
     if char_a > 0.05:
         action = "talk" if 0.08 < p < 0.88 else "idle"
-        draw_character(draw, cx, 440, t_anim*2, color=color,
-                       scale=1.05*char_a, action=action)
+        draw_character(draw, 90, 270, t_anim*2,
+                       color=color, scale=0.75*char_a, action=action)
 
-    # ── Speech bubble (right side) ──
-    bx1,by1,bx2,by2 = 300, 80, W-20, 360
-    bub_a = ease_out(min((p-0.12)/0.18,1)) * fade
+    # Scene name (right panel)
+    bub_a = ease_out(min((p-0.1)/0.2,1)) * fade
     if bub_a > 0.05:
-        rrect(draw, [bx1,by1,bx2,by2], r=16,
-              fill=blend(BG,CARD,bub_a*0.92),
-              outline=blend(BG,color,bub_a*0.7), w=2)
-        # bubble tail
-        tail = [(bx1,by2-50),(bx1-28,by2+18),(bx1+38,by2-14)]
-        draw.polygon(tail, fill=blend(BG,CARD,bub_a*0.92))
-        draw.line([(bx1,by2-50),(bx1-28,by2+18)],
-                  fill=blend(BG,color,bub_a*0.7), width=2)
-        draw.line([(bx1-28,by2+18),(bx1+38,by2-14)],
-                  fill=blend(BG,color,bub_a*0.7), width=2)
-
-        # Scene name inside bubble
-        draw.text(((bx1+bx2)//2, by1+36), name.upper(),
-                  font=font(30,True), fill=blend(BG,color,bub_a), anchor="mm")
-        draw.line([bx1+30, by1+56, bx2-30, by1+56],
-                  fill=blend(BG,color,bub_a*0.4), width=1)
-
-        # Scene index dots
-        for si in range(8):
-            dot_col = color if si == idx%8 else GRAY
-            dx = (bx1+bx2)//2 - 56 + si*16
-            draw.ellipse([dx-5, by2-22, dx+5, by2-12],
+        draw.rectangle([170, 52, W-8, 210],
+                       fill=blend(BG, CARD, bub_a*0.9))
+        draw.rectangle([170, 52, 174, 210],
+                       fill=blend(BG, color, bub_a*0.8))
+        draw.text((W//2+50, 100), name.upper(),
+                  font=font(20,True), fill=blend(BG,color,bub_a), anchor="mm")
+        draw.line([185, 118, W-18, 118],
+                  fill=blend(BG,color,bub_a*0.3), width=1)
+        # chapter dots
+        for si in range(min(8, idx+2)):
+            dot_col = color if si == idx else GRAY
+            dx = W//2 + 30 + (si - min(8,idx+2)//2)*14
+            draw.ellipse([dx-4,185,dx+4,193],
                          fill=blend(BG,dot_col,bub_a))
-
-    # ── Progress bar (bottom strip) ──
-    prog = (idx + p) / max(1, idx+1)
-    bw = int(prog * W)
-    for x in range(bw):
-        t_ = x/W
-        c = tuple(int(lerp(ca,cb,t_)) for ca,cb in zip(C1,C2))
-        draw.line([x, H-5, x, H], fill=c)
 
     return draw
 
@@ -338,8 +287,13 @@ def generate_video(job_id, topic, script, voice):
                                           t_anim, color, topic, narration)
 
                 # Subtitle
-                sub_p = min(p / 0.15, 1.0)   # reveal text quickly
+                sub_p = min(p / 0.15, 1.0)
                 draw  = draw_subtitle(draw, narration, sub_p, color)
+
+                # Progress bar (bottom 3px)
+                prog = (frame_n) / max(total_frames,1)
+                bw   = int(prog * W)
+                draw.rectangle([0, H-3, bw, H], fill=C1)
 
                 writer.append_data(np.array(img))
                 frame_n += 1
