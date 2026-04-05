@@ -58,34 +58,41 @@ LANGUAGES = {
     "Portuguese":       "pt-BR-FranciscaNeural",
 }
 
-# ── Bundled fonts (no system dependency, no fc-match) ────────────────────────
-_FONTS_DIR = BASE_DIR / "fonts"
+# ── Bundled fonts — per-character script detection ────────────────────────────
+_FONTS_DIR  = BASE_DIR / "fonts"
 _FONT_CACHE = {}
+_ACTIVE_FONT = ('NotoSans-Regular.ttf', 'NotoSans-Bold.ttf')
 
-# voice → (regular_file, bold_file)
-_VOICE_FONT = {
-    'ta-IN-PallaviNeural':  ('NotoSansTamil-Regular.ttf',      'NotoSansTamil-Bold.ttf'),
-    'hi-IN-SwaraNeural':    ('NotoSansDevanagari-Regular.ttf',  'NotoSansDevanagari-Bold.ttf'),
-    'te-IN-ShrutiNeural':   ('NotoSansTelugu-Regular.ttf',      'NotoSans-Bold.ttf'),
-    'ar-EG-SalmaNeural':    ('NotoSansArabic-Regular.ttf',      'NotoSans-Bold.ttf'),
-}
-_DEFAULT_FONT = ('NotoSans-Regular.ttf', 'NotoSans-Bold.ttf')
+# Unicode range → (regular, bold)
+_SCRIPT_FONTS = [
+    (0x0B80, 0x0BFF, 'NotoSansTamil-Regular.ttf',     'NotoSansTamil-Bold.ttf'),
+    (0x0900, 0x097F, 'NotoSansDevanagari-Regular.ttf', 'NotoSansDevanagari-Bold.ttf'),
+    (0x0C00, 0x0C7F, 'NotoSansTelugu-Regular.ttf',     'NotoSans-Bold.ttf'),
+    (0x0600, 0x06FF, 'NotoSansArabic-Regular.ttf',     'NotoSans-Bold.ttf'),
+]
 
-_ACTIVE_FONT = _DEFAULT_FONT   # updated per video
+def _script_files(text):
+    """Return (regular, bold) font filenames for the dominant script in text."""
+    for ch in text:
+        cp = ord(ch)
+        for lo, hi, reg, bld in _SCRIPT_FONTS:
+            if lo <= cp <= hi:
+                return reg, bld
+    return 'NotoSans-Regular.ttf', 'NotoSans-Bold.ttf'
+
+def font(size, bold=False, text=''):
+    """Return cached font — auto-picks script from text characters."""
+    reg, bld = _script_files(text) if text else ('NotoSans-Regular.ttf','NotoSans-Bold.ttf')
+    fname = bld if bold else reg
+    key   = (fname, size)
+    if key not in _FONT_CACHE:
+        try:    _FONT_CACHE[key] = ImageFont.truetype(str(_FONTS_DIR / fname), size)
+        except: _FONT_CACHE[key] = ImageFont.load_default()
+    return _FONT_CACHE[key]
 
 def set_render_lang(voice):
     global _ACTIVE_FONT, _FONT_CACHE
-    _ACTIVE_FONT = _VOICE_FONT.get(voice, _DEFAULT_FONT)
-    _FONT_CACHE  = {}   # clear cache for new language
-
-def font(size, bold=False):
-    key = (size, bold)
-    if key not in _FONT_CACHE:
-        fname = _ACTIVE_FONT[1] if bold else _ACTIVE_FONT[0]
-        path  = str(_FONTS_DIR / fname)
-        try:    _FONT_CACHE[key] = ImageFont.truetype(path, size)
-        except: _FONT_CACHE[key] = ImageFont.load_default()
-    return _FONT_CACHE[key]
+    _FONT_CACHE = {}   # clear cache between videos
 
 def ease_out(t): return 1 - (1 - max(0, min(1, t))) ** 3
 def blend(base, col, a): return tuple(int(b*(1-a)+c*a) for b,c in zip(base, col))
@@ -161,7 +168,7 @@ def draw_subtitle(draw, text, p, color):
     visible = ' '.join(words[:max(1, int(len(words) * min(p * 1.5, 1.0)))])
     lines   = textwrap.wrap(visible, 60)[:2]
     if not lines: return draw
-    f     = font(13)
+    f     = font(13, text=text)
     lh    = 18
     pad   = 6
     box_h = len(lines) * lh + pad * 2
@@ -182,7 +189,7 @@ def draw_content_panel(draw, idx, name, p, t_anim, color, topic, narration):
     # Slim top bar (30px)
     draw.rectangle([0, 0, W, 30], fill=blend(BG, color, bar_a * 0.3))
     draw.text((W // 2, 15), topic,
-              font=font(11, True), fill=blend(BG, color, bar_a), anchor="mm")
+              font=font(11, True, text=topic), fill=blend(BG, color, bar_a), anchor="mm")
     draw.text((W - 6, 15), f"#{idx+1}",
               font=font(10, True), fill=blend(BG, color, bar_a * 0.6), anchor="rm")
 
@@ -202,7 +209,7 @@ def draw_content_panel(draw, idx, name, p, t_anim, color, topic, narration):
         sname_lines = textwrap.wrap(name, 28)[:2]
         for li, sl in enumerate(sname_lines):
             draw.text((175, 60 + li * 22), sl,
-                      font=font(14, True), fill=blend(BG, color, bub_a))
+                      font=font(14, True, text=sl), fill=blend(BG, color, bub_a))
         # chapter indicator dots
         for si in range(min(idx + 2, 8)):
             col_d = color if si == idx else GRAY
@@ -298,14 +305,14 @@ def generate_video(job_id, topic, script, voice):
             # slim top bar
             sd.rectangle([0, 0, W, 30], fill=blend(BG, color, 0.3))
             sd.text((W // 2, 15), topic,
-                    font=font(11, True), fill=color, anchor="mm")
+                    font=font(11, True, text=topic), fill=color, anchor="mm")
             sd.text((W - 6, 15), f"#{idx+1}",
                     font=font(10, True), fill=blend(BG, color, 0.6), anchor="rm")
             # accent line + scene name
             sd.rectangle([160, 38, 163, 200], fill=blend(BG, color, 0.7))
             for li, sl in enumerate(textwrap.wrap(scene['name'], 28)[:2]):
                 sd.text((175, 60 + li * 22), sl,
-                        font=font(14, True), fill=color)
+                        font=font(14, True, text=sl), fill=color)
             static_arr = np.array(static)
 
             for f in range(sf):
