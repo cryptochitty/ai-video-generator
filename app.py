@@ -58,47 +58,31 @@ LANGUAGES = {
     "Portuguese":       "pt-BR-FranciscaNeural",
 }
 
-# ── Font (language-aware + cached) ───────────────────────────────────────────
-_FONT_PATH_REG  = None
-_FONT_PATH_BOLD = None
-_FONT_CACHE     = {}
-_RENDER_LANG    = 'en'   # set per-video before rendering
+# ── Bundled fonts (no system dependency, no fc-match) ────────────────────────
+_FONTS_DIR = BASE_DIR / "fonts"
+_FONT_CACHE = {}
 
-# Map edge-tts voice → fc-match lang tag
-_VOICE_LANG = {
-    'en-US-JennyNeural':'en', 'en-GB-SoniaNeural':'en',
-    'hi-IN-SwaraNeural':'hi', 'ta-IN-PallaviNeural':'ta',
-    'te-IN-ShrutiNeural':'te', 'es-ES-ElviraNeural':'es',
-    'fr-FR-DeniseNeural':'fr', 'de-DE-KatjaNeural':'de',
-    'ar-EG-SalmaNeural':'ar', 'ja-JP-NanamiNeural':'ja',
-    'zh-CN-XiaoxiaoNeural':'zh', 'pt-BR-FranciscaNeural':'pt',
+# voice → (regular_file, bold_file)
+_VOICE_FONT = {
+    'ta-IN-PallaviNeural':  ('NotoSansTamil-Regular.ttf',      'NotoSansTamil-Bold.ttf'),
+    'hi-IN-SwaraNeural':    ('NotoSansDevanagari-Regular.ttf',  'NotoSansDevanagari-Bold.ttf'),
+    'te-IN-ShrutiNeural':   ('NotoSansTelugu-Regular.ttf',      'NotoSans-Bold.ttf'),
+    'ar-EG-SalmaNeural':    ('NotoSansArabic-Regular.ttf',      'NotoSans-Bold.ttf'),
 }
+_DEFAULT_FONT = ('NotoSans-Regular.ttf', 'NotoSans-Bold.ttf')
+
+_ACTIVE_FONT = _DEFAULT_FONT   # updated per video
 
 def set_render_lang(voice):
-    global _RENDER_LANG, _FONT_PATH_REG, _FONT_PATH_BOLD, _FONT_CACHE
-    _RENDER_LANG    = _VOICE_LANG.get(voice, 'en')
-    _FONT_PATH_REG  = None   # reset so next font() call re-detects
-    _FONT_PATH_BOLD = None
-    _FONT_CACHE     = {}
-
-def _init_font_paths():
-    global _FONT_PATH_REG, _FONT_PATH_BOLD
-    if _FONT_PATH_REG: return
-    lang = _RENDER_LANG
-    try:
-        _FONT_PATH_REG  = subprocess.run(
-            ['fc-match', f':lang={lang}', '--format=%{file}'],
-            capture_output=True, text=True).stdout.strip()
-        _FONT_PATH_BOLD = subprocess.run(
-            ['fc-match', f':lang={lang}:weight=bold', '--format=%{file}'],
-            capture_output=True, text=True).stdout.strip()
-    except: pass
+    global _ACTIVE_FONT, _FONT_CACHE
+    _ACTIVE_FONT = _VOICE_FONT.get(voice, _DEFAULT_FONT)
+    _FONT_CACHE  = {}   # clear cache for new language
 
 def font(size, bold=False):
-    _init_font_paths()
     key = (size, bold)
     if key not in _FONT_CACHE:
-        path = _FONT_PATH_BOLD if bold else _FONT_PATH_REG
+        fname = _ACTIVE_FONT[1] if bold else _ACTIVE_FONT[0]
+        path  = str(_FONTS_DIR / fname)
         try:    _FONT_CACHE[key] = ImageFont.truetype(path, size)
         except: _FONT_CACHE[key] = ImageFont.load_default()
     return _FONT_CACHE[key]
