@@ -58,19 +58,40 @@ LANGUAGES = {
     "Portuguese":       "pt-BR-FranciscaNeural",
 }
 
-# ── Font (cached — never calls subprocess twice for same size) ────────────────
+# ── Font (language-aware + cached) ───────────────────────────────────────────
 _FONT_PATH_REG  = None
 _FONT_PATH_BOLD = None
 _FONT_CACHE     = {}
+_RENDER_LANG    = 'en'   # set per-video before rendering
+
+# Map edge-tts voice → fc-match lang tag
+_VOICE_LANG = {
+    'en-US-JennyNeural':'en', 'en-GB-SoniaNeural':'en',
+    'hi-IN-SwaraNeural':'hi', 'ta-IN-PallaviNeural':'ta',
+    'te-IN-ShrutiNeural':'te', 'es-ES-ElviraNeural':'es',
+    'fr-FR-DeniseNeural':'fr', 'de-DE-KatjaNeural':'de',
+    'ar-EG-SalmaNeural':'ar', 'ja-JP-NanamiNeural':'ja',
+    'zh-CN-XiaoxiaoNeural':'zh', 'pt-BR-FranciscaNeural':'pt',
+}
+
+def set_render_lang(voice):
+    global _RENDER_LANG, _FONT_PATH_REG, _FONT_PATH_BOLD, _FONT_CACHE
+    _RENDER_LANG    = _VOICE_LANG.get(voice, 'en')
+    _FONT_PATH_REG  = None   # reset so next font() call re-detects
+    _FONT_PATH_BOLD = None
+    _FONT_CACHE     = {}
 
 def _init_font_paths():
     global _FONT_PATH_REG, _FONT_PATH_BOLD
     if _FONT_PATH_REG: return
+    lang = _RENDER_LANG
     try:
-        _FONT_PATH_REG  = subprocess.run(["fc-match","DejaVu Sans","--format=%{file}"],
-                                          capture_output=True,text=True).stdout.strip()
-        _FONT_PATH_BOLD = subprocess.run(["fc-match","DejaVu Sans Bold","--format=%{file}"],
-                                          capture_output=True,text=True).stdout.strip()
+        _FONT_PATH_REG  = subprocess.run(
+            ['fc-match', f':lang={lang}', '--format=%{file}'],
+            capture_output=True, text=True).stdout.strip()
+        _FONT_PATH_BOLD = subprocess.run(
+            ['fc-match', f':lang={lang}:weight=bold', '--format=%{file}'],
+            capture_output=True, text=True).stdout.strip()
     except: pass
 
 def font(size, bold=False):
@@ -251,6 +272,7 @@ def concat_audio(files, out_file):
 # ── Main video generator ──────────────────────────────────────────────────────
 def generate_video(job_id, topic, script, voice):
     try:
+        set_render_lang(voice)   # set language-aware font before rendering
         job_set(job_id, status='running', message='Generating voiceover...', progress=5)
 
         silent_path = f"/tmp/{job_id}_silent.mp4"
