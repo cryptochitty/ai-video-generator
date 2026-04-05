@@ -41,7 +41,7 @@ GRAY = (136, 146, 176)
 CARD = (26, 26, 46)
 SCENE_COLORS = [C1, C4, C2, C3, (179,136,255), (255,138,101), C2, C3, C1, C4]
 
-W, H, FPS = 640, 360, 12   # 360p @ 12fps — fast render on free tier
+W, H, FPS = 640, 360, 8    # 360p @ 8fps — fastest render on free tier
 
 LANGUAGES = {
     "English (US)":     "en-US-JennyNeural",
@@ -58,15 +58,29 @@ LANGUAGES = {
     "Portuguese":       "pt-BR-FranciscaNeural",
 }
 
-# ── Font ─────────────────────────────────────────────────────────────────────
-def font(size, bold=False):
+# ── Font (cached — never calls subprocess twice for same size) ────────────────
+_FONT_PATH_REG  = None
+_FONT_PATH_BOLD = None
+_FONT_CACHE     = {}
+
+def _init_font_paths():
+    global _FONT_PATH_REG, _FONT_PATH_BOLD
+    if _FONT_PATH_REG: return
     try:
-        r = subprocess.run(
-            ["fc-match", "DejaVu Sans" + (" Bold" if bold else ""), "--format=%{file}"],
-            capture_output=True, text=True).stdout.strip()
-        return ImageFont.truetype(r, size)
-    except:
-        return ImageFont.load_default()
+        _FONT_PATH_REG  = subprocess.run(["fc-match","DejaVu Sans","--format=%{file}"],
+                                          capture_output=True,text=True).stdout.strip()
+        _FONT_PATH_BOLD = subprocess.run(["fc-match","DejaVu Sans Bold","--format=%{file}"],
+                                          capture_output=True,text=True).stdout.strip()
+    except: pass
+
+def font(size, bold=False):
+    _init_font_paths()
+    key = (size, bold)
+    if key not in _FONT_CACHE:
+        path = _FONT_PATH_BOLD if bold else _FONT_PATH_REG
+        try:    _FONT_CACHE[key] = ImageFont.truetype(path, size)
+        except: _FONT_CACHE[key] = ImageFont.load_default()
+    return _FONT_CACHE[key]
 
 def ease_out(t): return 1 - (1 - max(0, min(1, t))) ** 3
 def blend(base, col, a): return tuple(int(b*(1-a)+c*a) for b,c in zip(base, col))
@@ -136,23 +150,24 @@ def draw_character(draw, x, y, t, color=C2, scale=1.0, action="talk"):
         draw.ellipse([lx-int(12*s), y+int(50*s)+int(bounce),
                       lx+int(12*s), y+int(63*s)+int(bounce)], fill=(40,40,60))
 
-# ── Fast subtitle (no RGBA overlay — plain text with shadow) ──────────────────
+# ── Subtitle — compact 2-line strip at very bottom ───────────────────────────
 def draw_subtitle(draw, text, p, color):
     words   = text.split()
-    visible = ' '.join(words[:max(1, int(len(words)*min(p*1.5,1.0)))])
-    lines   = textwrap.wrap(visible, 45) or ['']
-    lh = 26
-    box_h = len(lines)*lh + 16
-    y1 = H - box_h - 6
-    # dark box (no RGBA — just draw a filled rect)
-    draw.rectangle([0, y1, W, H], fill=(0,0,18))
-    draw.rectangle([0, y1, 4, H], fill=color)
-    f = font(18)
+    visible = ' '.join(words[:max(1, int(len(words)*min(p*1.5, 1.0)))])
+    lines   = textwrap.wrap(visible, 52)[:2]   # max 2 lines only
+    if not lines: return draw
+    lh    = 22
+    pad   = 8
+    box_h = len(lines)*lh + pad*2
+    y1    = H - box_h                           # anchored to very bottom
+    # narrow dark strip
+    draw.rectangle([0, y1, W, H], fill=(4, 4, 22))
+    draw.rectangle([0, y1, 3, H], fill=color)   # thin colour accent
+    f = font(16)
     for i, ln in enumerate(lines):
-        ty = y1 + 8 + i*lh
-        # shadow
-        draw.text((12, ty+1), ln, font=f, fill=(0,0,0))
-        draw.text((11, ty),   ln, font=f, fill=W_C)
+        ty = y1 + pad + i*lh
+        draw.text((10, ty+1), ln, font=f, fill=(0,0,0))   # shadow
+        draw.text((9,  ty),   ln, font=f, fill=W_C)
     return draw
 
 # ── On-screen content (fast flat layout) ─────────────────────────────────────
@@ -273,27 +288,43 @@ def generate_video(job_id, topic, script, voice):
             narration= scene['text']
             sf       = int(duration * FPS)
 
+            # ── Pre-render static background once per scene ──────────────────
+            static = Image.new("RGB", (W, H), BG)
+            draw_particles(static, particles)   # snapshot particle positions
+            sd = ImageDraw.Draw(static)
+            # top bar
+            sd.rectangle([0,0,W,44], fill=blend(BG, color, 0.25))
+            sd.text((W//2, 22), topic.upper(),
+                    font=font(14,True), fill=color, anchor="mm")
+            sd.text((W-8, 22), f"#{idx+1}",
+                    font=font(13,True), fill=blend(BG,color,0.7), anchor="rm")
+            # scene panel
+            sd.rectangle([170, 52, W-8, 210], fill=blend(BG, CARD, 0.9))
+            sd.rectangle([170, 52, 174, 210], fill=color)
+            sd.text((W//2+50, 100), scene['name'].upper(),
+                    font=font(18,True), fill=color, anchor="mm")
+            sd.line([185,116,W-18,116], fill=blend(BG,color,0.3), width=1)
+            static_arr = np.array(static)   # convert once
+
             for f in range(sf):
                 p      = f / max(sf-1, 1)
                 t_anim = t_abs + f / FPS
 
-                img  = Image.new("RGB", (W, H), BG)
-                draw_particles(img, particles)
+                # Start from pre-rendered static (fast copy)
+                img  = Image.fromarray(static_arr.copy())
                 draw = ImageDraw.Draw(img)
-                draw._image = img   # attach for subtitle overlay
 
-                # Main content
-                draw = draw_content_panel(draw, idx, scene['name'], p,
-                                          t_anim, color, topic, narration)
+                # Dynamic: character only
+                action = "talk" if 0.08 < p < 0.88 else "idle"
+                draw_character(draw, 90, 270, t_anim*2,
+                               color=color, scale=0.75, action=action)
 
-                # Subtitle
-                sub_p = min(p / 0.15, 1.0)
-                draw  = draw_subtitle(draw, narration, sub_p, color)
+                # Subtitle (compact strip)
+                draw_subtitle(draw, narration, min(p/0.12, 1.0), color)
 
-                # Progress bar (bottom 3px)
-                prog = (frame_n) / max(total_frames,1)
-                bw   = int(prog * W)
-                draw.rectangle([0, H-3, bw, H], fill=C1)
+                # Progress bar (2px, above subtitle)
+                bw = int(frame_n / max(total_frames,1) * W)
+                draw.rectangle([0, H-2, bw, H], fill=C1)
 
                 writer.append_data(np.array(img))
                 frame_n += 1
@@ -301,7 +332,7 @@ def generate_video(job_id, topic, script, voice):
             t_abs += duration
             pct = 26 + int(frame_n / total_frames * 60)
             job_set(job_id, progress=pct,
-                                message=f'Rendering scene {idx+1}/{total_scenes}')
+                    message=f'Rendering scene {idx+1}/{total_scenes}')
 
         writer.close()
 
