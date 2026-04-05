@@ -5,14 +5,14 @@ Features: edge-tts voice, multilingual, on-screen text, auto timing sync
 
 import os, math, random, subprocess, threading, time, uuid, asyncio, re, textwrap
 from pathlib import Path
-from flask import Flask, request, jsonify, send_file, render_template_string
+from flask import Flask, request, jsonify, send_file, render_template
 from PIL import Image, ImageDraw, ImageFont
 import imageio, numpy as np
 
 app = Flask(__name__)
 
 JOBS = {}
-OUTPUT_DIR = Path("videos")
+OUTPUT_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "videos"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ── Colours ───────────────────────────────────────────────────────────────────
@@ -364,8 +364,7 @@ def generate_video(job_id, topic, script, voice):
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
-    tmpl = open(os.path.join(os.path.dirname(__file__), 'templates', 'index.html')).read()
-    return render_template_string(tmpl, languages=list(LANGUAGES.keys()))
+    return render_template('index.html', languages=list(LANGUAGES.keys()))
 
 @app.route('/generate', methods=['POST'])
 def start_generate():
