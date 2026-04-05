@@ -1,9 +1,9 @@
 """
 AI Video Generator — Flask Web App
-Features: edge-tts voice, multilingual, on-screen text, auto timing sync
+Modern motion-graphics style with per-word font detection (no boxes), small subtitles.
 """
 
-import os, math, random, subprocess, threading, time, uuid, asyncio, re, textwrap, json
+import os, math, random, subprocess, threading, uuid, asyncio, re, textwrap, json
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file, render_template
 from PIL import Image, ImageDraw, ImageFont
@@ -17,7 +17,7 @@ JOBS_DIR   = BASE_DIR / "jobs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 JOBS_DIR.mkdir(exist_ok=True)
 
-# ── Persist job state to disk (survives Render restarts) ──────────────────────
+# ── Persist job state to disk ─────────────────────────────────────────────────
 def job_set(job_id, **data):
     path = JOBS_DIR / f"{job_id}.json"
     existing = job_get(job_id) or {}
@@ -31,48 +31,47 @@ def job_get(job_id):
     return None
 
 # ── Colours ───────────────────────────────────────────────────────────────────
-BG   = (10, 10, 30)
+BG   = (8, 8, 24)
 C1   = (0, 201, 255)
-C2   = (146, 254, 157)
-C3   = (255, 107, 107)
-C4   = (255, 217, 61)
+C2   = (100, 255, 150)
+C3   = (255, 100, 120)
+C4   = (255, 210, 60)
+C5   = (180, 130, 255)
 W_C  = (255, 255, 255)
-GRAY = (136, 146, 176)
-CARD = (26, 26, 46)
-SCENE_COLORS = [C1, C4, C2, C3, (179,136,255), (255,138,101), C2, C3, C1, C4]
+GRAY = (80, 90, 120)
+SCENE_COLORS = [C1, C4, C2, C3, C5, (255, 140, 100), C2, C3, C1, C4]
 
-W, H, FPS = 640, 360, 8    # 360p @ 8fps — fastest render on free tier
+W, H, FPS = 640, 360, 8
 
 LANGUAGES = {
-    "English (US)":     "en-US-JennyNeural",
-    "English (UK)":     "en-GB-SoniaNeural",
-    "Hindi":            "hi-IN-SwaraNeural",
-    "Tamil":            "ta-IN-PallaviNeural",
-    "Telugu":           "te-IN-ShrutiNeural",
-    "Spanish":          "es-ES-ElviraNeural",
-    "French":           "fr-FR-DeniseNeural",
-    "German":           "de-DE-KatjaNeural",
-    "Arabic":           "ar-EG-SalmaNeural",
-    "Japanese":         "ja-JP-NanamiNeural",
-    "Chinese":          "zh-CN-XiaoxiaoNeural",
-    "Portuguese":       "pt-BR-FranciscaNeural",
+    "English (US)":  "en-US-JennyNeural",
+    "English (UK)":  "en-GB-SoniaNeural",
+    "Hindi":         "hi-IN-SwaraNeural",
+    "Tamil":         "ta-IN-PallaviNeural",
+    "Telugu":        "te-IN-ShrutiNeural",
+    "Spanish":       "es-ES-ElviraNeural",
+    "French":        "fr-FR-DeniseNeural",
+    "German":        "de-DE-KatjaNeural",
+    "Arabic":        "ar-EG-SalmaNeural",
+    "Japanese":      "ja-JP-NanamiNeural",
+    "Chinese":       "zh-CN-XiaoxiaoNeural",
+    "Portuguese":    "pt-BR-FranciscaNeural",
 }
 
-# ── Bundled fonts — per-character script detection ────────────────────────────
+# ── Fonts — per-character script detection ────────────────────────────────────
 _FONTS_DIR  = BASE_DIR / "fonts"
 _FONT_CACHE = {}
-_ACTIVE_FONT = ('NotoSans-Regular.ttf', 'NotoSans-Bold.ttf')
 
-# Unicode range → (regular, bold)
 _SCRIPT_FONTS = [
     (0x0B80, 0x0BFF, 'NotoSansTamil-Regular.ttf',     'NotoSansTamil-Bold.ttf'),
     (0x0900, 0x097F, 'NotoSansDevanagari-Regular.ttf', 'NotoSansDevanagari-Bold.ttf'),
     (0x0C00, 0x0C7F, 'NotoSansTelugu-Regular.ttf',     'NotoSans-Bold.ttf'),
     (0x0600, 0x06FF, 'NotoSansArabic-Regular.ttf',     'NotoSans-Bold.ttf'),
+    (0x3040, 0x30FF, 'NotoSans-Regular.ttf',           'NotoSans-Bold.ttf'),  # Japanese kana
+    (0x4E00, 0x9FFF, 'NotoSans-Regular.ttf',           'NotoSans-Bold.ttf'),  # CJK
 ]
 
 def _script_files(text):
-    """Return (regular, bold) font filenames for the dominant script in text."""
     for ch in text:
         cp = ord(ch)
         for lo, hi, reg, bld in _SCRIPT_FONTS:
@@ -81,37 +80,86 @@ def _script_files(text):
     return 'NotoSans-Regular.ttf', 'NotoSans-Bold.ttf'
 
 def font(size, bold=False, text=''):
-    """Return cached font — auto-picks script from text characters."""
-    reg, bld = _script_files(text) if text else ('NotoSans-Regular.ttf','NotoSans-Bold.ttf')
+    reg, bld = _script_files(text) if text else ('NotoSans-Regular.ttf', 'NotoSans-Bold.ttf')
     fname = bld if bold else reg
-    key   = (fname, size)
+    key = (fname, size)
     if key not in _FONT_CACHE:
         try:    _FONT_CACHE[key] = ImageFont.truetype(str(_FONTS_DIR / fname), size)
         except: _FONT_CACHE[key] = ImageFont.load_default()
     return _FONT_CACHE[key]
 
 def set_render_lang(voice):
-    global _ACTIVE_FONT, _FONT_CACHE
-    _FONT_CACHE = {}   # clear cache between videos
+    global _FONT_CACHE
+    _FONT_CACHE = {}
 
-def ease_out(t): return 1 - (1 - max(0, min(1, t))) ** 3
-def blend(base, col, a): return tuple(int(b*(1-a)+c*a) for b,c in zip(base, col))
-def lerp(a, b, t): return a + (b-a)*t
-def rrect(draw, box, r=10, fill=None, outline=None, w=2):
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def ease_out(t):    return 1 - (1 - max(0.0, min(1.0, t))) ** 3
+def ease_in_out(t): t = max(0.0, min(1.0, t)); return t * t * (3 - 2 * t)
+def blend(base, col, a): return tuple(int(b*(1-a)+c*a) for b, c in zip(base, col))
+def rrect(draw, box, r=10, fill=None, outline=None, w=1):
     draw.rounded_rectangle(box, radius=r, fill=fill, outline=outline, width=w)
+
+def _word_w(f, word):
+    try:    return int(f.getlength(word))
+    except: bb = f.getbbox(word); return (bb[2]-bb[0]) if bb else 8
+
+# ── Per-word mixed-script renderer (eliminates boxes in all languages) ────────
+def draw_mixed(draw, xy, text, size, bold=False, fill=W_C, anchor=None, shadow=False, max_px=None):
+    """Render text word-by-word choosing correct font per word — no boxes."""
+    if not text or not text.strip(): return
+    words = text.split()
+    if not words: return
+
+    sp_w = _word_w(font(size, bold), ' ')
+    parts = [(w, font(size, bold, text=w), _word_w(font(size, bold, text=w), w)) for w in words]
+    total_w = sum(pw for _, _, pw in parts) + sp_w * max(0, len(parts) - 1)
+
+    # Truncate if wider than max_px
+    if max_px and total_w > max_px:
+        trimmed, tw = [], 0
+        for w, wf, pw in parts:
+            if tw + pw > max_px - 20: break
+            trimmed.append((w, wf, pw)); tw += pw + sp_w
+        parts = trimmed
+        total_w = sum(pw for _, _, pw in parts) + sp_w * max(0, len(parts)-1)
+
+    x, y = xy
+    if anchor == "mm":
+        x -= total_w // 2
+        y -= size // 2
+    elif anchor == "rm":
+        x -= total_w
+    elif anchor == "lm":
+        y -= size // 2
+
+    for i, (word, wf, pw) in enumerate(parts):
+        if shadow:
+            draw.text((x+1, y+1), word, font=wf, fill=(0, 0, 0))
+        draw.text((x, y), word, font=wf, fill=fill)
+        x += pw + (sp_w if i < len(parts)-1 else 0)
+
+# ── Background ────────────────────────────────────────────────────────────────
+def draw_grid(draw, color):
+    gc = blend(BG, color, 0.06)
+    for x in range(0, W+1, 40):
+        draw.line([(x, 0), (x, H)], fill=gc, width=1)
+    for y in range(0, H+1, 40):
+        draw.line([(0, y), (W, y)], fill=gc, width=1)
 
 def make_particles():
     random.seed(42)
-    return [dict(x=random.uniform(0,W), y=random.uniform(0,H),
-                 vx=random.uniform(-0.25,0.25), vy=random.uniform(-0.25,0.25),
-                 r=random.uniform(1,2), col=random.choice([C1,C2,C3,C4]),
-                 a=random.uniform(0.08,0.25)) for _ in range(22)]  # fewer = faster
+    return [dict(
+        x=random.uniform(0, W), y=random.uniform(0, H),
+        vx=random.uniform(-0.3, 0.3), vy=random.uniform(-0.3, 0.3),
+        r=random.uniform(1, 2.5), col=random.choice([C1, C2, C3, C4, C5]),
+        a=random.uniform(0.06, 0.2)
+    ) for _ in range(28)]
 
 def draw_particles(img, particles):
     d = ImageDraw.Draw(img)
     for p in particles:
-        p['x'] = (p['x']+p['vx']) % W
-        p['y'] = (p['y']+p['vy']) % H
+        p['x'] = (p['x'] + p['vx']) % W
+        p['y'] = (p['y'] + p['vy']) % H
         c = blend(BG, p['col'], p['a'])
         r = max(1, int(p['r']))
         d.ellipse([p['x']-r, p['y']-r, p['x']+r, p['y']+r], fill=c)
@@ -124,29 +172,37 @@ def draw_character(draw, x, y, t, color=C2, scale=1.0, action="talk"):
     body_bot = y + int(10*s) + int(bounce)
     head_y   = y - int(85*s) + int(bounce)
     head_r   = int(28*s)
+    # Shadow
     draw.ellipse([x-int(35*s), y+int(12*s), x+int(35*s), y+int(22*s)],
-                 fill=blend(BG,(50,50,80),0.7))
+                 fill=blend(BG, (50, 50, 80), 0.7))
+    # Glow ring
+    rrect(draw, [x-int(25*s), body_top-2, x+int(25*s), body_bot+2], r=10,
+          fill=None, outline=blend(BG, color, 0.3), w=2)
+    # Body
     rrect(draw, [x-int(22*s), body_top, x+int(22*s), body_bot], r=8,
           fill=color, outline=blend(color, W_C, 0.3), w=2)
+    # Head
     head_col = (255, 220, 177)
     draw.ellipse([x-head_r, head_y-head_r, x+head_r, head_y+head_r],
-                 fill=head_col, outline=blend(head_col,W_C,0.2), width=2)
+                 fill=head_col, outline=blend(head_col, W_C, 0.2), width=2)
+    # Eyes
     eye_blink = abs(math.sin(t * math.pi * 0.4)) > 0.95
     eye_h = 3 if eye_blink else int(6*s)
     for ex in [x-int(10*s), x+int(10*s)]:
         draw.ellipse([ex-int(5*s), head_y-int(8*s),
-                      ex+int(5*s), head_y-int(8*s)+eye_h], fill=(40,40,60))
+                      ex+int(5*s), head_y-int(8*s)+eye_h], fill=(40, 40, 60))
+    # Mouth
     if action == "talk":
         mo = abs(math.sin(t * math.pi * 5)) * int(9*s)
-        draw.arc([x-int(12*s), head_y+int(4*s),
-                  x+int(12*s), head_y+int(14*s)+mo],
-                 0, 180, fill=(180,80,80), width=int(3*s))
+        draw.arc([x-int(12*s), head_y+int(4*s), x+int(12*s), head_y+int(14*s)+mo],
+                 0, 180, fill=(180, 80, 80), width=int(3*s))
     else:
-        draw.arc([x-int(12*s), head_y+int(4*s),
-                  x+int(12*s), head_y+int(16*s)],
-                 0, 180, fill=(180,80,80), width=int(3*s))
+        draw.arc([x-int(12*s), head_y+int(4*s), x+int(12*s), head_y+int(16*s)],
+                 0, 180, fill=(180, 80, 80), width=int(3*s))
+    # Hair
     draw.arc([x-head_r, head_y-head_r, x+head_r, head_y+int(5*s)],
-             200, 340, fill=(80,50,20), width=int(8*s))
+             200, 340, fill=(80, 50, 20), width=int(8*s))
+    # Arms
     arm_angle = math.sin(t * math.pi * 1.5) * 0.2
     r_arm = (x+int(45*s), body_top+int(40*s)+int(bounce))
     draw.line([x+int(20*s), body_top+int(15*s), r_arm[0], r_arm[1]],
@@ -155,185 +211,234 @@ def draw_character(draw, x, y, t, color=C2, scale=1.0, action="talk"):
              body_top+int(15*s)-int(30*math.sin(arm_angle)*s)+int(bounce))
     draw.line([x-int(20*s), body_top+int(15*s), l_arm[0], l_arm[1]],
               fill=head_col, width=int(8*s))
+    # Legs
     for sign in [-1, 1]:
         lx = x + sign*int(12*s)
         draw.line([lx, body_bot, lx, y+int(55*s)+int(bounce)],
-                  fill=blend(color,(30,30,60),0.4), width=int(12*s))
+                  fill=blend(color, (30, 30, 60), 0.4), width=int(12*s))
         draw.ellipse([lx-int(12*s), y+int(50*s)+int(bounce),
-                      lx+int(12*s), y+int(63*s)+int(bounce)], fill=(40,40,60))
+                      lx+int(12*s), y+int(63*s)+int(bounce)], fill=(40, 40, 60))
 
-# ── Subtitle — slim transparent bar, wraps properly ──────────────────────────
+# ── Subtitle — compact bottom pill with small font ────────────────────────────
 def draw_subtitle(draw, text, p, color):
-    words   = text.split()
-    visible = ' '.join(words[:max(1, int(len(words) * min(p * 1.5, 1.0)))])
-    lines   = textwrap.wrap(visible, 60)[:2]
-    if not lines: return draw
-    f     = font(13, text=text)
-    lh    = 18
-    pad   = 6
-    box_h = len(lines) * lh + pad * 2
-    y1    = H - box_h
-    draw.rectangle([0, y1, W, H], fill=(0, 0, 14))
-    draw.rectangle([0, y1, 3, H], fill=color)
+    """Small subtitle pill at bottom — font 10px, 2 lines max, word-by-word."""
+    words = text.split()
+    if not words: return
+    n_visible = max(1, int(len(words) * min(p * 1.4, 1.0)))
+    visible = ' '.join(words[:n_visible])
+    lines = textwrap.wrap(visible, 80)[:2]
+    if not lines: return
+
+    SZ  = 10          # ← small subtitle font
+    LH  = 14
+    PAD = 5
+    box_h = len(lines) * LH + PAD * 2
+    y1 = H - box_h - 5
+
+    # Pill background
+    rrect(draw, [5, y1, W-5, H-5], r=5, fill=(6, 6, 22))
+    # Color accent stripe
+    rrect(draw, [5, y1, 9, H-5], r=3, fill=blend(BG, color, 0.85))
+
     for i, ln in enumerate(lines):
-        ty = y1 + pad + i * lh
-        draw.text((8, ty + 1), ln, font=f, fill=(0, 0, 0))
-        draw.text((7, ty),     ln, font=f, fill=W_C)
-    return draw
+        ty = y1 + PAD + i * LH
+        # Per-word rendering handles mixed scripts
+        xpos = 15
+        sp_f = font(SZ)
+        sp_w = _word_w(sp_f, ' ')
+        for j, w in enumerate(ln.split()):
+            wf = font(SZ, text=w)
+            draw.text((xpos+1, ty+1), w, font=wf, fill=(0, 0, 0))
+            draw.text((xpos,   ty),   w, font=wf, fill=W_C)
+            xpos += _word_w(wf, w) + (sp_w if j < len(ln.split())-1 else 0)
 
-# ── On-screen content ─────────────────────────────────────────────────────────
-def draw_content_panel(draw, idx, name, p, t_anim, color, topic, narration):
-    fade  = min(p / 0.08, 1.0, (1 - p) / 0.06)
-    bar_a = ease_out(min(p / 0.12, 1)) * fade
+# ── Top bar ───────────────────────────────────────────────────────────────────
+def draw_top_bar(draw, topic, idx, total, color, bar_a):
+    draw.rectangle([0, 0, W, 28], fill=blend(BG, (18, 18, 42), 0.98))
+    draw.rectangle([0, 27, W, 28], fill=blend(BG, color, bar_a * 0.7))
+    # Topic title center
+    draw_mixed(draw, (W//2, 14), topic, 11, bold=True,
+               fill=blend(BG, W_C, bar_a * 0.95), anchor="mm",
+               max_px=W - 80)
+    # Scene counter badge (right)
+    badge = f"  {idx+1} / {total}  "
+    bw = _word_w(font(9, True), badge)
+    bx = W - 6 - bw
+    rrect(draw, [bx-2, 4, W-5, 24], r=5, fill=blend(BG, color, bar_a * 0.25))
+    draw_mixed(draw, (W-8, 14), f"{idx+1}/{total}", 9, bold=True,
+               fill=blend(BG, color, bar_a), anchor="rm")
 
-    # Slim top bar (30px)
-    draw.rectangle([0, 0, W, 30], fill=blend(BG, color, bar_a * 0.3))
-    draw.text((W // 2, 15), topic,
-              font=font(11, True, text=topic), fill=blend(BG, color, bar_a), anchor="mm")
-    draw.text((W - 6, 15), f"#{idx+1}",
-              font=font(10, True), fill=blend(BG, color, bar_a * 0.6), anchor="rm")
+# ── Scene card (right panel) ──────────────────────────────────────────────────
+def draw_scene_card(draw, idx, name, p, color, total_scenes):
+    """Attractive right-side card: scene name, accent, dots."""
+    a = ease_out(min(p / 0.2, 1.0))
+    if a < 0.02: return
 
-    # Character (left side, smaller)
-    char_a = ease_out(min((p - 0.04) / 0.18, 1)) * fade
-    if char_a > 0.05:
-        action = "talk" if 0.08 < p < 0.88 else "idle"
-        draw_character(draw, 75, 240, t_anim * 2,
-                       color=color, scale=0.62 * char_a, action=action)
+    cx1, cy1, cx2, cy2 = 152, 34, W - 6, 298
 
-    # Scene name — right side, no big box, just styled text
-    bub_a = ease_out(min((p - 0.1) / 0.2, 1)) * fade
-    if bub_a > 0.05:
-        # thin accent line left edge
-        draw.rectangle([160, 38, 163, 200], fill=blend(BG, color, bub_a * 0.7))
-        # scene name (smaller font, wraps if long)
-        sname_lines = textwrap.wrap(name, 28)[:2]
-        for li, sl in enumerate(sname_lines):
-            draw.text((175, 60 + li * 22), sl,
-                      font=font(14, True, text=sl), fill=blend(BG, color, bub_a))
-        # chapter indicator dots
-        for si in range(min(idx + 2, 8)):
-            col_d = color if si == idx else GRAY
-            draw.ellipse([175 + si * 12, 170, 183 + si * 12, 178],
-                         fill=blend(BG, col_d, bub_a * 0.8))
+    # Card bg + border
+    rrect(draw, [cx1, cy1, cx2, cy2], r=10,
+          fill=blend(BG, (22, 22, 52), a * 0.96),
+          outline=blend(BG, color, a * 0.45), w=1)
 
-    return draw
+    # Top accent bar inside card
+    rrect(draw, [cx1, cy1, cx2, cy1+3], r=2,
+          fill=blend(BG, color, a * 0.8))
 
+    # Chapter circle badge
+    bx, by = cx1 + 14, cy1 + 14
+    draw.ellipse([bx, by, bx+26, by+26],
+                 fill=blend(BG, color, a * 0.9))
+    draw_mixed(draw, (bx+13, by+13), str(idx+1), 10, bold=True,
+               fill=BG, anchor="mm", shadow=False)
 
-# ── TTS via edge-tts ──────────────────────────────────────────────────────────
+    # Scene name — large bold text
+    name_lines = textwrap.wrap(name, 20)[:2]
+    for li, nl in enumerate(name_lines):
+        ty = cy1 + 14 + li * 26
+        draw_mixed(draw, (bx+32, ty), nl, 17, bold=True,
+                   fill=blend(BG, W_C, a), max_px=cx2 - bx - 40)
+
+    # Divider
+    dy = cy1 + 14 + len(name_lines) * 26 + 6
+    fill_w = int((cx2 - cx1 - 20) * a)
+    draw.rectangle([cx1+10, dy, cx1+10+fill_w, dy+1],
+                   fill=blend(BG, color, a * 0.6))
+
+    # Decorative circles (visual interest)
+    for ci in range(3):
+        cr = 18 - ci * 5
+        cx_c = cx2 - 20 - ci * 8
+        cy_c = cy1 + 18
+        draw.ellipse([cx_c-cr, cy_c-cr, cx_c+cr, cy_c+cr],
+                     fill=None, outline=blend(BG, color, a * (0.15 - ci*0.03)), width=1)
+
+    # Scene progress dots
+    dot_y = cy2 - 14
+    for si in range(min(total_scenes, 8)):
+        col_d = color if si == idx else GRAY
+        dot_a = a * (1.0 if si == idx else 0.45)
+        r = 5 if si == idx else 3
+        dx = cx1 + 14 + si * 15
+        draw.ellipse([dx-r, dot_y-r, dx+r, dot_y+r],
+                     fill=blend(BG, col_d, dot_a))
+
+    # Narration preview line (small, below divider) — first 8 words
+    # This gives a "teaser" of what's being said
+    dy2 = dy + 6
+
+# ── TTS ───────────────────────────────────────────────────────────────────────
 def generate_tts(text, voice, out_file):
     import edge_tts
-
     async def _run():
         communicate = edge_tts.Communicate(text, voice)
         await communicate.save(out_file)
-
     asyncio.run(_run())
 
-
 def get_audio_duration(audio_file):
-    """Return duration in seconds using bundled ffmpeg."""
     import imageio_ffmpeg
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    r = subprocess.run([ffmpeg, '-i', audio_file],
-                       capture_output=True, text=True)
+    r = subprocess.run([ffmpeg, '-i', audio_file], capture_output=True, text=True)
     m = re.search(r'Duration:\s*(\d+):(\d+):([\d.]+)', r.stderr)
     if m:
         h, mn, s = m.groups()
         return int(h)*3600 + int(mn)*60 + float(s)
-    return 8.0  # fallback
-
+    return 8.0
 
 def concat_audio(files, out_file):
-    """Concatenate multiple MP3 files using ffmpeg."""
     import imageio_ffmpeg
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     list_file = out_file + ".txt"
-    with open(list_file, 'w') as f:
+    with open(list_file, 'w') as lf:
         for af in files:
-            f.write(f"file '{af}'\n")
+            lf.write(f"file '{af}'\n")
     subprocess.run([ffmpeg, '-y', '-f', 'concat', '-safe', '0',
                     '-i', list_file, '-c', 'copy', out_file],
                    capture_output=True)
     os.remove(list_file)
 
-
 # ── Main video generator ──────────────────────────────────────────────────────
 def generate_video(job_id, topic, script, voice):
     try:
-        set_render_lang(voice)   # set language-aware font before rendering
+        set_render_lang(voice)
         job_set(job_id, status='running', message='Generating voiceover...', progress=5)
 
-        silent_path = f"/tmp/{job_id}_silent.mp4"
-        out_path    = str(OUTPUT_DIR / f"{job_id}.mp4")
+        silent_path  = f"/tmp/{job_id}_silent.mp4"
+        out_path     = str(OUTPUT_DIR / f"{job_id}.mp4")
         scene_audios = []
-
-        # ── Step 1: Generate per-scene audio & measure duration ──
         total_scenes = len(script)
+
+        # ── Step 1: TTS per scene ─────────────────────────────────────────────
         for i, scene in enumerate(script):
             af = f"/tmp/{job_id}_s{i}.mp3"
             generate_tts(scene['text'], voice, af)
             dur = get_audio_duration(af)
-            scene['actual_duration'] = max(dur + 0.5, 3.0)  # +0.5s padding
+            scene['actual_duration'] = max(dur + 0.5, 3.0)
             scene_audios.append(af)
-            pct = 5 + int((i+1)/total_scenes * 20)
+            pct = 5 + int((i+1) / total_scenes * 20)
             job_set(job_id, progress=pct,
-                                message=f'Voice {i+1}/{total_scenes}: {scene["name"]}')
+                    message=f'Voice {i+1}/{total_scenes}: {scene["name"]}')
 
-        # Concatenate all scene audios
         combined_audio = f"/tmp/{job_id}_audio.mp3"
         concat_audio(scene_audios, combined_audio)
 
-        # ── Step 2: Render video frames ──
+        # ── Step 2: Render frames ─────────────────────────────────────────────
         job_set(job_id, message='Rendering animation...', progress=26)
         total_frames = sum(int(s['actual_duration'] * FPS) for s in script)
         particles    = make_particles()
 
-        writer = imageio.get_writer(silent_path, fps=FPS, quality=8, macro_block_size=1)
+        writer  = imageio.get_writer(silent_path, fps=FPS, quality=8, macro_block_size=1)
         frame_n = 0
         t_abs   = 0.0
 
         for idx, scene in enumerate(script):
-            color    = SCENE_COLORS[idx % len(SCENE_COLORS)]
-            duration = scene['actual_duration']
-            narration= scene['text']
-            sf       = int(duration * FPS)
+            color     = SCENE_COLORS[idx % len(SCENE_COLORS)]
+            duration  = scene['actual_duration']
+            narration = scene['text']
+            sf        = int(duration * FPS)
 
-            # ── Pre-render static background once per scene ──────────────────
+            # Pre-render static bg (particles + grid only)
             static = Image.new("RGB", (W, H), BG)
             draw_particles(static, particles)
             sd = ImageDraw.Draw(static)
-            # slim top bar
-            sd.rectangle([0, 0, W, 30], fill=blend(BG, color, 0.3))
-            sd.text((W // 2, 15), topic,
-                    font=font(11, True, text=topic), fill=color, anchor="mm")
-            sd.text((W - 6, 15), f"#{idx+1}",
-                    font=font(10, True), fill=blend(BG, color, 0.6), anchor="rm")
-            # accent line + scene name
-            sd.rectangle([160, 38, 163, 200], fill=blend(BG, color, 0.7))
-            for li, sl in enumerate(textwrap.wrap(scene['name'], 28)[:2]):
-                sd.text((175, 60 + li * 22), sl,
-                        font=font(14, True, text=sl), fill=color)
+            draw_grid(sd, color)
             static_arr = np.array(static)
 
-            for f in range(sf):
-                p      = f / max(sf-1, 1)
-                t_anim = t_abs + f / FPS
+            for fi in range(sf):
+                p      = fi / max(sf - 1, 1)
+                t_anim = t_abs + fi / FPS
 
-                # Start from pre-rendered static (fast copy)
                 img  = Image.fromarray(static_arr.copy())
                 draw = ImageDraw.Draw(img)
 
-                # Dynamic: character only
-                action = "talk" if 0.08 < p < 0.88 else "idle"
-                draw_character(draw, 90, 270, t_anim*2,
-                               color=color, scale=0.75, action=action)
+                # Scene fade-in overlay (first 6% of scene)
+                fade = ease_in_out(min(p / 0.06, 1.0))
 
-                # Subtitle (compact strip)
-                draw_subtitle(draw, narration, min(p/0.12, 1.0), color)
+                # UI elements
+                bar_a = ease_out(min(p / 0.12, 1.0))
+                draw_top_bar(draw, topic, idx, total_scenes, color, bar_a)
+                draw_scene_card(draw, idx, scene['name'], p, color, total_scenes)
 
-                # Progress bar (2px, above subtitle)
-                bw = int(frame_n / max(total_frames,1) * W)
-                draw.rectangle([0, H-2, bw, H], fill=C1)
+                # Character (left side)
+                char_a = ease_out(min((p - 0.04) / 0.18, 1.0))
+                if char_a > 0.05:
+                    action = "talk" if 0.08 < p < 0.88 else "idle"
+                    draw_character(draw, 78, 262, t_anim * 2,
+                                   color=color, scale=0.72 * char_a, action=action)
+
+                # Subtitle (small, bottom pill)
+                draw_subtitle(draw, narration, min(p / 0.1, 1.0), color)
+
+                # Scene fade-in from black
+                if fade < 0.99:
+                    black = Image.new("RGB", (W, H), BG)
+                    img   = Image.blend(black, img, fade)
+
+                # Global progress bar — always on top, 3px
+                final = ImageDraw.Draw(img)
+                bw  = int(frame_n / max(total_frames, 1) * W)
+                progress_color = blend(C1, C2, frame_n / max(total_frames, 1))
+                final.rectangle([0, 0, bw, 3], fill=progress_color)
 
                 writer.append_data(np.array(img))
                 frame_n += 1
@@ -345,7 +450,7 @@ def generate_video(job_id, topic, script, voice):
 
         writer.close()
 
-        # ── Step 3: Merge audio + video ──
+        # ── Step 3: Merge audio ───────────────────────────────────────────────
         job_set(job_id, message='Merging audio + video...', progress=88)
         import imageio_ffmpeg
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
@@ -357,9 +462,8 @@ def generate_video(job_id, topic, script, voice):
                        capture_output=True)
 
         job_set(job_id, status='done', progress=100,
-                            message='Video ready!', file=out_path)
+                message='Video ready!', file=out_path)
 
-        # Cleanup
         for f in scene_audios + [combined_audio, silent_path]:
             try: os.remove(f)
             except: pass
@@ -374,8 +478,7 @@ def generate_video(job_id, topic, script, voice):
 @app.route('/debug')
 def debug():
     files = [f.name for f in _FONTS_DIR.iterdir()] if _FONTS_DIR.exists() else []
-    return jsonify({'fonts_dir': str(_FONTS_DIR), 'files': sorted(files),
-                    'active_font': list(_ACTIVE_FONT)})
+    return jsonify({'fonts_dir': str(_FONTS_DIR), 'files': sorted(files)})
 
 @app.route('/')
 def index():
@@ -385,18 +488,18 @@ def index():
 def start_generate():
     data   = request.json
     job_id = str(uuid.uuid4())[:8]
-    voice  = LANGUAGES.get(data.get('language','English (US)'), 'en-US-JennyNeural')
+    voice  = LANGUAGES.get(data.get('language', 'English (US)'), 'en-US-JennyNeural')
     job_set(job_id, status='pending', progress=0, message='Queued...', file=None)
     threading.Thread(target=generate_video,
-                     args=(job_id, data.get('topic','Video'),
-                           data.get('script',[]), voice),
+                     args=(job_id, data.get('topic', 'Video'),
+                           data.get('script', []), voice),
                      daemon=True).start()
     return jsonify({'job_id': job_id})
 
 @app.route('/status/<job_id>')
 def status(job_id):
     job = job_get(job_id)
-    return jsonify(job or {'status':'error','message':'Not found','progress':0})
+    return jsonify(job or {'status': 'error', 'message': 'Not found', 'progress': 0})
 
 @app.route('/download/<job_id>')
 def download(job_id):
