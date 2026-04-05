@@ -155,62 +155,59 @@ def draw_character(draw, x, y, t, color=C2, scale=1.0, action="talk"):
         draw.ellipse([lx-int(12*s), y+int(50*s)+int(bounce),
                       lx+int(12*s), y+int(63*s)+int(bounce)], fill=(40,40,60))
 
-# ── Subtitle — compact 2-line strip at very bottom ───────────────────────────
+# ── Subtitle — slim transparent bar, wraps properly ──────────────────────────
 def draw_subtitle(draw, text, p, color):
     words   = text.split()
-    visible = ' '.join(words[:max(1, int(len(words)*min(p*1.5, 1.0)))])
-    lines   = textwrap.wrap(visible, 52)[:2]   # max 2 lines only
+    visible = ' '.join(words[:max(1, int(len(words) * min(p * 1.5, 1.0)))])
+    lines   = textwrap.wrap(visible, 60)[:2]
     if not lines: return draw
-    lh    = 22
-    pad   = 8
-    box_h = len(lines)*lh + pad*2
-    y1    = H - box_h                           # anchored to very bottom
-    # narrow dark strip
-    draw.rectangle([0, y1, W, H], fill=(4, 4, 22))
-    draw.rectangle([0, y1, 3, H], fill=color)   # thin colour accent
-    f = font(16)
+    f     = font(13)
+    lh    = 18
+    pad   = 6
+    box_h = len(lines) * lh + pad * 2
+    y1    = H - box_h
+    draw.rectangle([0, y1, W, H], fill=(0, 0, 14))
+    draw.rectangle([0, y1, 3, H], fill=color)
     for i, ln in enumerate(lines):
-        ty = y1 + pad + i*lh
-        draw.text((10, ty+1), ln, font=f, fill=(0,0,0))   # shadow
-        draw.text((9,  ty),   ln, font=f, fill=W_C)
+        ty = y1 + pad + i * lh
+        draw.text((8, ty + 1), ln, font=f, fill=(0, 0, 0))
+        draw.text((7, ty),     ln, font=f, fill=W_C)
     return draw
 
-# ── On-screen content (fast flat layout) ─────────────────────────────────────
+# ── On-screen content ─────────────────────────────────────────────────────────
 def draw_content_panel(draw, idx, name, p, t_anim, color, topic, narration):
-    fade  = min(p/0.08, 1.0, (1-p)/0.06)
-    bar_a = ease_out(min(p/0.12, 1)) * fade
+    fade  = min(p / 0.08, 1.0, (1 - p) / 0.06)
+    bar_a = ease_out(min(p / 0.12, 1)) * fade
 
-    # Top bar
-    draw.rectangle([0,0,W,44], fill=blend(BG, color, bar_a*0.25))
-    draw.text((W//2, 22), topic.upper(),
-              font=font(14,True), fill=blend(BG,color,bar_a), anchor="mm")
-    draw.text((W-8, 22), f"#{idx+1}",
-              font=font(13,True), fill=blend(BG,color,bar_a*0.7), anchor="rm")
+    # Slim top bar (30px)
+    draw.rectangle([0, 0, W, 30], fill=blend(BG, color, bar_a * 0.3))
+    draw.text((W // 2, 15), topic,
+              font=font(11, True), fill=blend(BG, color, bar_a), anchor="mm")
+    draw.text((W - 6, 15), f"#{idx+1}",
+              font=font(10, True), fill=blend(BG, color, bar_a * 0.6), anchor="rm")
 
-    # Character (left)
-    char_a = ease_out(min((p-0.04)/0.18,1)) * fade
+    # Character (left side, smaller)
+    char_a = ease_out(min((p - 0.04) / 0.18, 1)) * fade
     if char_a > 0.05:
         action = "talk" if 0.08 < p < 0.88 else "idle"
-        draw_character(draw, 90, 270, t_anim*2,
-                       color=color, scale=0.75*char_a, action=action)
+        draw_character(draw, 75, 240, t_anim * 2,
+                       color=color, scale=0.62 * char_a, action=action)
 
-    # Scene name (right panel)
-    bub_a = ease_out(min((p-0.1)/0.2,1)) * fade
+    # Scene name — right side, no big box, just styled text
+    bub_a = ease_out(min((p - 0.1) / 0.2, 1)) * fade
     if bub_a > 0.05:
-        draw.rectangle([170, 52, W-8, 210],
-                       fill=blend(BG, CARD, bub_a*0.9))
-        draw.rectangle([170, 52, 174, 210],
-                       fill=blend(BG, color, bub_a*0.8))
-        draw.text((W//2+50, 100), name.upper(),
-                  font=font(20,True), fill=blend(BG,color,bub_a), anchor="mm")
-        draw.line([185, 118, W-18, 118],
-                  fill=blend(BG,color,bub_a*0.3), width=1)
-        # chapter dots
-        for si in range(min(8, idx+2)):
-            dot_col = color if si == idx else GRAY
-            dx = W//2 + 30 + (si - min(8,idx+2)//2)*14
-            draw.ellipse([dx-4,185,dx+4,193],
-                         fill=blend(BG,dot_col,bub_a))
+        # thin accent line left edge
+        draw.rectangle([160, 38, 163, 200], fill=blend(BG, color, bub_a * 0.7))
+        # scene name (smaller font, wraps if long)
+        sname_lines = textwrap.wrap(name, 28)[:2]
+        for li, sl in enumerate(sname_lines):
+            draw.text((175, 60 + li * 22), sl,
+                      font=font(14, True), fill=blend(BG, color, bub_a))
+        # chapter indicator dots
+        for si in range(min(idx + 2, 8)):
+            col_d = color if si == idx else GRAY
+            draw.ellipse([175 + si * 12, 170, 183 + si * 12, 178],
+                         fill=blend(BG, col_d, bub_a * 0.8))
 
     return draw
 
@@ -296,21 +293,20 @@ def generate_video(job_id, topic, script, voice):
 
             # ── Pre-render static background once per scene ──────────────────
             static = Image.new("RGB", (W, H), BG)
-            draw_particles(static, particles)   # snapshot particle positions
+            draw_particles(static, particles)
             sd = ImageDraw.Draw(static)
-            # top bar
-            sd.rectangle([0,0,W,44], fill=blend(BG, color, 0.25))
-            sd.text((W//2, 22), topic.upper(),
-                    font=font(14,True), fill=color, anchor="mm")
-            sd.text((W-8, 22), f"#{idx+1}",
-                    font=font(13,True), fill=blend(BG,color,0.7), anchor="rm")
-            # scene panel
-            sd.rectangle([170, 52, W-8, 210], fill=blend(BG, CARD, 0.9))
-            sd.rectangle([170, 52, 174, 210], fill=color)
-            sd.text((W//2+50, 100), scene['name'].upper(),
-                    font=font(18,True), fill=color, anchor="mm")
-            sd.line([185,116,W-18,116], fill=blend(BG,color,0.3), width=1)
-            static_arr = np.array(static)   # convert once
+            # slim top bar
+            sd.rectangle([0, 0, W, 30], fill=blend(BG, color, 0.3))
+            sd.text((W // 2, 15), topic,
+                    font=font(11, True), fill=color, anchor="mm")
+            sd.text((W - 6, 15), f"#{idx+1}",
+                    font=font(10, True), fill=blend(BG, color, 0.6), anchor="rm")
+            # accent line + scene name
+            sd.rectangle([160, 38, 163, 200], fill=blend(BG, color, 0.7))
+            for li, sl in enumerate(textwrap.wrap(scene['name'], 28)[:2]):
+                sd.text((175, 60 + li * 22), sl,
+                        font=font(14, True), fill=color)
+            static_arr = np.array(static)
 
             for f in range(sf):
                 p      = f / max(sf-1, 1)
@@ -368,6 +364,12 @@ def generate_video(job_id, topic, script, voice):
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+@app.route('/debug')
+def debug():
+    files = [f.name for f in _FONTS_DIR.iterdir()] if _FONTS_DIR.exists() else []
+    return jsonify({'fonts_dir': str(_FONTS_DIR), 'files': sorted(files),
+                    'active_font': list(_ACTIVE_FONT)})
+
 @app.route('/')
 def index():
     return render_template('index.html', languages=list(LANGUAGES.keys()))
