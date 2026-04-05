@@ -6,69 +6,110 @@
 <title>AI Video Generator</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:#0D0D1A;color:#fff;font-family:'Segoe UI',Arial,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}
-  .container{width:100%;max-width:860px;padding:30px 20px}
-  h1{text-align:center;font-size:2.1rem;color:#00C9FF;margin-bottom:6px;letter-spacing:1px}
-  .sub{text-align:center;color:#8892B0;margin-bottom:30px;font-size:.95rem}
-  .card{background:#1A1A2E;border:1px solid #00C9FF33;border-radius:14px;padding:28px;margin-bottom:20px}
-  label{display:block;color:#00C9FF;font-size:.85rem;font-weight:700;margin-bottom:7px;letter-spacing:.5px}
-  input[type=text],textarea{width:100%;background:#0D0D1A;border:1.5px solid #00C9FF44;border-radius:8px;color:#fff;padding:12px 14px;font-size:1rem;outline:none;transition:.2s;font-family:inherit}
-  input[type=text]:focus,textarea:focus{border-color:#00C9FF}
-  textarea{resize:vertical;min-height:72px;font-size:.88rem}
-  .scene-hdr{display:grid;grid-template-columns:160px 1fr 80px 38px;gap:10px;margin-bottom:4px}
-  .col-hdr{font-size:.76rem;color:#8892B0;font-weight:600;letter-spacing:.4px}
-  .scenes{display:flex;flex-direction:column;gap:10px}
-  .scene-row{display:grid;grid-template-columns:160px 1fr 80px 38px;gap:10px;align-items:start}
-  .scene-row input[type=number]{text-align:center;background:#0D0D1A;border:1.5px solid #00C9FF44;border-radius:8px;color:#fff;padding:12px 6px;font-size:1rem;outline:none}
-  .del-btn{background:#FF6B6B22;border:1px solid #FF6B6B55;color:#FF6B6B;border-radius:6px;cursor:pointer;padding:10px 8px;font-size:1rem;transition:.2s;width:38px}
-  .del-btn:hover{background:#FF6B6B44}
-  .add-btn{background:#92FE9D22;border:1.5px dashed #92FE9D55;color:#92FE9D;border-radius:8px;padding:10px;width:100%;cursor:pointer;font-size:.9rem;margin-top:10px;transition:.2s}
-  .add-btn:hover{background:#92FE9D33}
-  .gen-btn{width:100%;background:linear-gradient(90deg,#00C9FF,#92FE9D);border:none;border-radius:10px;color:#0D0D1A;font-size:1.15rem;font-weight:800;padding:17px;cursor:pointer;letter-spacing:1px;transition:.2s;margin-top:4px}
+  body{background:#0D0D1A;color:#fff;font-family:'Segoe UI',Arial,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px 0}
+  .container{width:100%;max-width:900px;padding:0 20px}
+  h1{text-align:center;font-size:2rem;color:#00C9FF;margin-bottom:5px;letter-spacing:1px}
+  .sub{text-align:center;color:#8892B0;margin-bottom:28px;font-size:.93rem}
+  .card{background:#1A1A2E;border:1px solid #00C9FF33;border-radius:14px;padding:26px;margin-bottom:18px}
+  label{display:block;color:#00C9FF;font-size:.82rem;font-weight:700;margin-bottom:7px;letter-spacing:.6px;text-transform:uppercase}
+  input[type=text],textarea,select{width:100%;background:#0D0D1A;border:1.5px solid #00C9FF33;border-radius:8px;color:#fff;padding:11px 14px;font-size:.97rem;outline:none;transition:.2s;font-family:inherit}
+  input[type=text]:focus,textarea:focus,select:focus{border-color:#00C9FF}
+  select option{background:#1A1A2E}
+  textarea{resize:vertical;min-height:68px;font-size:.87rem}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .scene-hdr{display:grid;grid-template-columns:155px 1fr 36px;gap:10px;margin-bottom:5px}
+  .col-hdr{font-size:.74rem;color:#8892B0;font-weight:600;letter-spacing:.4px;text-transform:uppercase}
+  .scenes{display:flex;flex-direction:column;gap:9px}
+  .scene-row{display:grid;grid-template-columns:155px 1fr 36px;gap:10px;align-items:start}
+  .scene-row input[type=text]{margin:0}
+  .del-btn{background:#FF6B6B18;border:1px solid #FF6B6B44;color:#FF6B6B;border-radius:7px;cursor:pointer;padding:10px 8px;font-size:.9rem;transition:.2s;width:36px}
+  .del-btn:hover{background:#FF6B6B33}
+  .add-btn{background:#92FE9D18;border:1.5px dashed #92FE9D44;color:#92FE9D;border-radius:8px;padding:10px;width:100%;cursor:pointer;font-size:.88rem;margin-top:9px;transition:.2s}
+  .add-btn:hover{background:#92FE9D2a}
+  .gen-btn{width:100%;background:linear-gradient(90deg,#00C9FF,#92FE9D);border:none;border-radius:10px;color:#0D0D1A;font-size:1.1rem;font-weight:800;padding:16px;cursor:pointer;letter-spacing:1px;transition:.2s;margin-top:2px}
   .gen-btn:hover{opacity:.88;transform:translateY(-1px)}
-  .gen-btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
-  #progress-box{display:none;margin-top:20px}
-  .prog-bar-wrap{background:#0D0D1A;border-radius:99px;height:12px;overflow:hidden;margin:14px 0}
+  .gen-btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+  #progress-box{display:none;margin-top:18px}
+  .prog-wrap{background:#0D0D1A;border-radius:99px;height:11px;overflow:hidden;margin:12px 0}
   .prog-bar{height:100%;background:linear-gradient(90deg,#00C9FF,#92FE9D);border-radius:99px;transition:width .5s ease;width:0%}
-  .status-msg{color:#92FE9D;font-size:.95rem;text-align:center;min-height:22px}
-  .prog-pct{text-align:center;color:#8892B0;font-size:.82rem}
-  #dl-box{display:none;text-align:center;margin-top:20px}
-  .dl-btn{display:inline-block;background:linear-gradient(90deg,#92FE9D,#00C9FF);color:#0D0D1A;font-weight:800;padding:15px 44px;border-radius:10px;text-decoration:none;font-size:1.1rem;letter-spacing:1px;transition:.2s}
-  .dl-btn:hover{opacity:.88;transform:translateY(-1px)}
-  .dl-hint{color:#8892B0;font-size:.82rem;margin-top:10px}
-  .err{color:#FF6B6B;text-align:center;margin-top:10px;font-size:.9rem;min-height:20px}
-  .badge{display:inline-block;background:#00C9FF22;border:1px solid #00C9FF44;color:#00C9FF;border-radius:99px;padding:3px 12px;font-size:.75rem;font-weight:700;margin-left:8px;vertical-align:middle}
+  .status-msg{color:#92FE9D;font-size:.93rem;text-align:center;min-height:22px}
+  .prog-pct{text-align:center;color:#8892B0;font-size:.8rem}
+  #dl-box{display:none;text-align:center;margin-top:18px}
+  .dl-btn{display:inline-block;background:linear-gradient(90deg,#92FE9D,#00C9FF);color:#0D0D1A;font-weight:800;padding:14px 44px;border-radius:10px;text-decoration:none;font-size:1.05rem;letter-spacing:1px;transition:.2s}
+  .dl-btn:hover{opacity:.87;transform:translateY(-1px)}
+  .dl-hint{color:#8892B0;font-size:.8rem;margin-top:9px}
+  .err{color:#FF6B6B;text-align:center;margin-top:9px;font-size:.88rem;min-height:18px}
+  .features{display:flex;justify-content:center;gap:18px;flex-wrap:wrap;margin-bottom:22px}
+  .feat{background:#1A1A2E;border:1px solid #00C9FF22;border-radius:99px;padding:6px 16px;font-size:.78rem;color:#8892B0}
+  .feat span{color:#00C9FF;font-weight:700}
+  .lang-voice{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:.8rem;color:#8892B0}
+  .voice-badge{background:#00C9FF18;border:1px solid #00C9FF33;color:#00C9FF;border-radius:6px;padding:3px 10px;font-size:.75rem;font-family:monospace}
 </style>
 </head>
 <body>
 <div class="container">
   <h1>🎬 AI Video Generator</h1>
-  <p class="sub">Enter your topic &amp; script — get an animated MP4 with voiceover &amp; character animation</p>
+  <p class="sub">Generate animated videos with AI voiceover, subtitles & character animation</p>
 
+  <div class="features">
+    <div class="feat"><span>🔊</span> Crystal-clear voice</div>
+    <div class="feat"><span>🌍</span> 12 languages</div>
+    <div class="feat"><span>📝</span> On-screen subtitles</div>
+    <div class="feat"><span>⏱</span> Auto timing sync</div>
+  </div>
+
+  <!-- Topic -->
   <div class="card">
-    <label>VIDEO TOPIC <span class="badge">required</span></label>
+    <label>Video Topic</label>
     <input type="text" id="topic" placeholder="e.g.  The Water Cycle  ·  Black Holes  ·  How AI Works" maxlength="80">
   </div>
 
+  <!-- Language -->
   <div class="card">
-    <label>SCRIPT SCENES</label>
-    <p style="color:#8892B0;font-size:.82rem;margin-bottom:14px">Each row is one chapter. The narrator will speak the text aloud.</p>
+    <div class="row2">
+      <div>
+        <label>Language & Voice</label>
+        <select id="language" onchange="updateVoiceBadge()">
+          {% for lang in languages %}
+          <option value="{{ lang }}">{{ lang }}</option>
+          {% endfor %}
+        </select>
+        <div class="lang-voice">
+          Voice: <span class="voice-badge" id="voice-badge">en-US-JennyNeural</span>
+        </div>
+      </div>
+      <div>
+        <label>Style</label>
+        <select id="style">
+          <option>Explainer</option>
+          <option>Storytelling</option>
+          <option>Educational</option>
+          <option>Motivational</option>
+        </select>
+        <div class="lang-voice" style="margin-top:6px">Video will auto-adjust to voice duration</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Script -->
+  <div class="card">
+    <label>Script Scenes</label>
+    <p style="color:#8892B0;font-size:.8rem;margin-bottom:12px">Each row = one chapter. Narrator speaks your text. Video timing adjusts automatically.</p>
     <div class="scene-hdr">
-      <div class="col-hdr">CHAPTER NAME</div>
-      <div class="col-hdr">NARRATION TEXT (what narrator says)</div>
-      <div class="col-hdr" style="text-align:center">SECS</div>
+      <div class="col-hdr">Chapter Name</div>
+      <div class="col-hdr">Narration text (spoken aloud + shown on screen)</div>
       <div></div>
     </div>
     <div class="scenes" id="scenes"></div>
     <button class="add-btn" onclick="addScene()">＋ Add Scene</button>
   </div>
 
-  <button class="gen-btn" id="gen-btn" onclick="generate()">▶ &nbsp;GENERATE VIDEO</button>
+  <button class="gen-btn" id="gen-btn" onclick="generate()">▶ &nbsp;Generate Video</button>
   <div class="err" id="err-msg"></div>
 
   <div class="card" id="progress-box">
     <div class="status-msg" id="status-msg">Starting...</div>
-    <div class="prog-bar-wrap"><div class="prog-bar" id="prog-bar"></div></div>
+    <div class="prog-wrap"><div class="prog-bar" id="prog-bar"></div></div>
     <div class="prog-pct" id="prog-pct">0%</div>
   </div>
 
@@ -79,75 +120,98 @@
 </div>
 
 <script>
+const VOICES = {
+  "English (US)":  "en-US-JennyNeural",
+  "English (UK)":  "en-GB-SoniaNeural",
+  "Hindi":         "hi-IN-SwaraNeural",
+  "Tamil":         "ta-IN-PallaviNeural",
+  "Telugu":        "te-IN-ShrutiNeural",
+  "Spanish":       "es-ES-ElviraNeural",
+  "French":        "fr-FR-DeniseNeural",
+  "German":        "de-DE-KatjaNeural",
+  "Arabic":        "ar-EG-SalmaNeural",
+  "Japanese":      "ja-JP-NanamiNeural",
+  "Chinese":       "zh-CN-XiaoxiaoNeural",
+  "Portuguese":    "pt-BR-FranciscaNeural",
+};
+
+function updateVoiceBadge(){
+  const lang = document.getElementById('language').value;
+  document.getElementById('voice-badge').textContent = VOICES[lang] || '';
+}
+
 const DEFAULTS = [
-  {name:"Introduction", text:"Welcome! Today we explore this amazing topic together.", dur:6},
-  {name:"Main Concept",  text:"Let us understand the core idea clearly and simply.", dur:8},
-  {name:"Key Details",   text:"Here are the important facts and insights you need to know.", dur:8},
-  {name:"Conclusion",    text:"To summarize, this is a fascinating topic that impacts all of us.", dur:6},
+  {name:"Introduction", text:"Welcome! Today we explore this amazing topic together."},
+  {name:"Main Concept",  text:"Let us understand the core idea clearly and simply."},
+  {name:"Key Details",   text:"Here are the important facts and insights you need to know."},
+  {name:"Conclusion",    text:"To summarize, this topic is fascinating and impacts all of us."},
 ];
 
-function addScene(name="New Scene", text="", dur=7){
-  const d=document.createElement('div');
-  d.className='scene-row';
-  d.innerHTML=`
-    <input type="text" class="sname" placeholder="Chapter name" value="${escH(name)}">
-    <textarea class="stext" placeholder="Narration text...">${escH(text)}</textarea>
-    <input type="number" class="sdur" value="${dur}" min="3" max="60">
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
+
+function addScene(name="New Scene", text=""){
+  const d = document.createElement('div');
+  d.className = 'scene-row';
+  d.innerHTML = `
+    <input type="text" class="sname" placeholder="Chapter name" value="${esc(name)}">
+    <textarea class="stext" placeholder="What the narrator will say (appears as subtitle on screen)...">${esc(text)}</textarea>
     <button class="del-btn" onclick="this.closest('.scene-row').remove()" title="Remove">✕</button>`;
   document.getElementById('scenes').appendChild(d);
 }
 
-function escH(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+DEFAULTS.forEach(s => addScene(s.name, s.text));
 
-DEFAULTS.forEach(s=>addScene(s.name,s.text,s.dur));
-
-let poll=null;
+let poll = null;
 
 function getScript(){
-  return [...document.querySelectorAll('.scene-row')].map(r=>({
-    name:r.querySelector('.sname').value.trim()||'Scene',
-    text:r.querySelector('.stext').value.trim()||'...',
-    duration:Math.max(3,parseInt(r.querySelector('.sdur').value)||7)
+  return [...document.querySelectorAll('.scene-row')].map(r => ({
+    name: r.querySelector('.sname').value.trim() || 'Scene',
+    text: r.querySelector('.stext').value.trim() || '...',
+    duration: 8
   }));
 }
 
 async function generate(){
-  const topic=document.getElementById('topic').value.trim();
-  const script=getScript();
-  const err=document.getElementById('err-msg');
-  err.textContent='';
-  if(!topic){err.textContent='⚠ Please enter a topic.';return;}
-  if(!script.length){err.textContent='⚠ Add at least one scene.';return;}
+  const topic    = document.getElementById('topic').value.trim();
+  const language = document.getElementById('language').value;
+  const script   = getScript();
+  const err      = document.getElementById('err-msg');
+  err.textContent = '';
 
-  document.getElementById('gen-btn').disabled=true;
-  document.getElementById('dl-box').style.display='none';
-  document.getElementById('progress-box').style.display='block';
-  document.getElementById('prog-bar').style.width='0%';
-  document.getElementById('prog-pct').textContent='0%';
-  document.getElementById('status-msg').textContent='Submitting...';
+  if(!topic){ err.textContent='⚠ Please enter a topic.'; return; }
+  if(!script.length){ err.textContent='⚠ Add at least one scene.'; return; }
 
-  const res=await fetch('/generate',{method:'POST',
+  document.getElementById('gen-btn').disabled = true;
+  document.getElementById('dl-box').style.display = 'none';
+  document.getElementById('progress-box').style.display = 'block';
+  document.getElementById('prog-bar').style.width = '0%';
+  document.getElementById('prog-pct').textContent = '0%';
+  document.getElementById('status-msg').textContent = 'Submitting...';
+
+  const res = await fetch('/generate', {
+    method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({topic,script})});
-  const {job_id}=await res.json();
+    body: JSON.stringify({topic, language, script})
+  });
+  const {job_id} = await res.json();
   if(poll) clearInterval(poll);
-  poll=setInterval(()=>checkStatus(job_id),1800);
+  poll = setInterval(() => checkStatus(job_id), 1800);
 }
 
-async function checkStatus(job_id){
-  const d=await(await fetch(`/status/${job_id}`)).json();
-  document.getElementById('status-msg').textContent=d.message;
-  document.getElementById('prog-bar').style.width=d.progress+'%';
-  document.getElementById('prog-pct').textContent=d.progress+'%';
-  if(d.status==='done'){
+async function checkStatus(id){
+  const d = await (await fetch(`/status/${id}`)).json();
+  document.getElementById('status-msg').textContent = d.message;
+  document.getElementById('prog-bar').style.width   = d.progress + '%';
+  document.getElementById('prog-pct').textContent   = d.progress + '%';
+  if(d.status === 'done'){
     clearInterval(poll);
-    document.getElementById('gen-btn').disabled=false;
-    document.getElementById('dl-box').style.display='block';
-    document.getElementById('dl-link').href=`/download/${job_id}`;
-  } else if(d.status==='error'){
+    document.getElementById('gen-btn').disabled = false;
+    document.getElementById('dl-box').style.display = 'block';
+    document.getElementById('dl-link').href = `/download/${id}`;
+  } else if(d.status === 'error'){
     clearInterval(poll);
-    document.getElementById('gen-btn').disabled=false;
-    document.getElementById('err-msg').textContent='⚠ '+d.message;
+    document.getElementById('gen-btn').disabled = false;
+    document.getElementById('err-msg').textContent = '⚠ ' + d.message;
   }
 }
 </script>
