@@ -1,0 +1,11 @@
+# Render.com deployment (recommended — free, no timeout limits)
+# Connect your GitHub repo at https://render.com → New Web Service
+services:
+  - type: web
+    name: ai-video-generator
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: PORT
+        value: 5000

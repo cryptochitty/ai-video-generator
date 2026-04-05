@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Video Generator</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0D0D1A;color:#fff;font-family:'Segoe UI',Arial,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}
+  .container{width:100%;max-width:860px;padding:30px 20px}
+  h1{text-align:center;font-size:2.1rem;color:#00C9FF;margin-bottom:6px;letter-spacing:1px}
+  .sub{text-align:center;color:#8892B0;margin-bottom:30px;font-size:.95rem}
+  .card{background:#1A1A2E;border:1px solid #00C9FF33;border-radius:14px;padding:28px;margin-bottom:20px}
+  label{display:block;color:#00C9FF;font-size:.85rem;font-weight:700;margin-bottom:7px;letter-spacing:.5px}
+  input[type=text],textarea{width:100%;background:#0D0D1A;border:1.5px solid #00C9FF44;border-radius:8px;color:#fff;padding:12px 14px;font-size:1rem;outline:none;transition:.2s;font-family:inherit}
+  input[type=text]:focus,textarea:focus{border-color:#00C9FF}
+  textarea{resize:vertical;min-height:72px;font-size:.88rem}
+  .scene-hdr{display:grid;grid-template-columns:160px 1fr 80px 38px;gap:10px;margin-bottom:4px}
+  .col-hdr{font-size:.76rem;color:#8892B0;font-weight:600;letter-spacing:.4px}
+  .scenes{display:flex;flex-direction:column;gap:10px}
+  .scene-row{display:grid;grid-template-columns:160px 1fr 80px 38px;gap:10px;align-items:start}
+  .scene-row input[type=number]{text-align:center;background:#0D0D1A;border:1.5px solid #00C9FF44;border-radius:8px;color:#fff;padding:12px 6px;font-size:1rem;outline:none}
+  .del-btn{background:#FF6B6B22;border:1px solid #FF6B6B55;color:#FF6B6B;border-radius:6px;cursor:pointer;padding:10px 8px;font-size:1rem;transition:.2s;width:38px}
+  .del-btn:hover{background:#FF6B6B44}
+  .add-btn{background:#92FE9D22;border:1.5px dashed #92FE9D55;color:#92FE9D;border-radius:8px;padding:10px;width:100%;cursor:pointer;font-size:.9rem;margin-top:10px;transition:.2s}
+  .add-btn:hover{background:#92FE9D33}
+  .gen-btn{width:100%;background:linear-gradient(90deg,#00C9FF,#92FE9D);border:none;border-radius:10px;color:#0D0D1A;font-size:1.15rem;font-weight:800;padding:17px;cursor:pointer;letter-spacing:1px;transition:.2s;margin-top:4px}
+  .gen-btn:hover{opacity:.88;transform:translateY(-1px)}
+  .gen-btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+  #progress-box{display:none;margin-top:20px}
+  .prog-bar-wrap{background:#0D0D1A;border-radius:99px;height:12px;overflow:hidden;margin:14px 0}
+  .prog-bar{height:100%;background:linear-gradient(90deg,#00C9FF,#92FE9D);border-radius:99px;transition:width .5s ease;width:0%}
+  .status-msg{color:#92FE9D;font-size:.95rem;text-align:center;min-height:22px}
+  .prog-pct{text-align:center;color:#8892B0;font-size:.82rem}
+  #dl-box{display:none;text-align:center;margin-top:20px}
+  .dl-btn{display:inline-block;background:linear-gradient(90deg,#92FE9D,#00C9FF);color:#0D0D1A;font-weight:800;padding:15px 44px;border-radius:10px;text-decoration:none;font-size:1.1rem;letter-spacing:1px;transition:.2s}
+  .dl-btn:hover{opacity:.88;transform:translateY(-1px)}
+  .dl-hint{color:#8892B0;font-size:.82rem;margin-top:10px}
+  .err{color:#FF6B6B;text-align:center;margin-top:10px;font-size:.9rem;min-height:20px}
+  .badge{display:inline-block;background:#00C9FF22;border:1px solid #00C9FF44;color:#00C9FF;border-radius:99px;padding:3px 12px;font-size:.75rem;font-weight:700;margin-left:8px;vertical-align:middle}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🎬 AI Video Generator</h1>
+  <p class="sub">Enter your topic &amp; script — get an animated MP4 with voiceover &amp; character animation</p>
+
+  <div class="card">
+    <label>VIDEO TOPIC <span class="badge">required</span></label>
+    <input type="text" id="topic" placeholder="e.g.  The Water Cycle  ·  Black Holes  ·  How AI Works" maxlength="80">
+  </div>
+
+  <div class="card">
+    <label>SCRIPT SCENES</label>
+    <p style="color:#8892B0;font-size:.82rem;margin-bottom:14px">Each row is one chapter. The narrator will speak the text aloud.</p>
+    <div class="scene-hdr">
+      <div class="col-hdr">CHAPTER NAME</div>
+      <div class="col-hdr">NARRATION TEXT (what narrator says)</div>
+      <div class="col-hdr" style="text-align:center">SECS</div>
+      <div></div>
+    </div>
+    <div class="scenes" id="scenes"></div>
+    <button class="add-btn" onclick="addScene()">＋ Add Scene</button>
+  </div>
+
+  <button class="gen-btn" id="gen-btn" onclick="generate()">▶ &nbsp;GENERATE VIDEO</button>
+  <div class="err" id="err-msg"></div>
+
+  <div class="card" id="progress-box">
+    <div class="status-msg" id="status-msg">Starting...</div>
+    <div class="prog-bar-wrap"><div class="prog-bar" id="prog-bar"></div></div>
+    <div class="prog-pct" id="prog-pct">0%</div>
+  </div>
+
+  <div id="dl-box">
+    <a class="dl-btn" id="dl-link" href="#" download="ai_video.mp4">⬇ &nbsp;Download Video (MP4)</a>
+    <p class="dl-hint">If download doesn't start — right-click → Save link as</p>
+  </div>
+</div>
+
+<script>
+const DEFAULTS = [
+  {name:"Introduction", text:"Welcome! Today we explore this amazing topic together.", dur:6},
+  {name:"Main Concept",  text:"Let us understand the core idea clearly and simply.", dur:8},
+  {name:"Key Details",   text:"Here are the important facts and insights you need to know.", dur:8},
+  {name:"Conclusion",    text:"To summarize, this is a fascinating topic that impacts all of us.", dur:6},
+];
+
+function addScene(name="New Scene", text="", dur=7){
+  const d=document.createElement('div');
+  d.className='scene-row';
+  d.innerHTML=`
+    <input type="text" class="sname" placeholder="Chapter name" value="${escH(name)}">
+    <textarea class="stext" placeholder="Narration text...">${escH(text)}</textarea>
+    <input type="number" class="sdur" value="${dur}" min="3" max="60">
+    <button class="del-btn" onclick="this.closest('.scene-row').remove()" title="Remove">✕</button>`;
+  document.getElementById('scenes').appendChild(d);
+}
+
+function escH(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+DEFAULTS.forEach(s=>addScene(s.name,s.text,s.dur));
+
+let poll=null;
+
+function getScript(){
+  return [...document.querySelectorAll('.scene-row')].map(r=>({
+    name:r.querySelector('.sname').value.trim()||'Scene',
+    text:r.querySelector('.stext').value.trim()||'...',
+    duration:Math.max(3,parseInt(r.querySelector('.sdur').value)||7)
+  }));
+}
+
+async function generate(){
+  const topic=document.getElementById('topic').value.trim();
+  const script=getScript();
+  const err=document.getElementById('err-msg');
+  err.textContent='';
+  if(!topic){err.textContent='⚠ Please enter a topic.';return;}
+  if(!script.length){err.textContent='⚠ Add at least one scene.';return;}
+
+  document.getElementById('gen-btn').disabled=true;
+  document.getElementById('dl-box').style.display='none';
+  document.getElementById('progress-box').style.display='block';
+  document.getElementById('prog-bar').style.width='0%';
+  document.getElementById('prog-pct').textContent='0%';
+  document.getElementById('status-msg').textContent='Submitting...';
+
+  const res=await fetch('/generate',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({topic,script})});
+  const {job_id}=await res.json();
+  if(poll) clearInterval(poll);
+  poll=setInterval(()=>checkStatus(job_id),1800);
+}
+
+async function checkStatus(job_id){
+  const d=await(await fetch(`/status/${job_id}`)).json();
+  document.getElementById('status-msg').textContent=d.message;
+  document.getElementById('prog-bar').style.width=d.progress+'%';
+  document.getElementById('prog-pct').textContent=d.progress+'%';
+  if(d.status==='done'){
+    clearInterval(poll);
+    document.getElementById('gen-btn').disabled=false;
+    document.getElementById('dl-box').style.display='block';
+    document.getElementById('dl-link').href=`/download/${job_id}`;
+  } else if(d.status==='error'){
+    clearInterval(poll);
+    document.getElementById('gen-btn').disabled=false;
+    document.getElementById('err-msg').textContent='⚠ '+d.message;
+  }
+}
+</script>
+</body>
+</html>
