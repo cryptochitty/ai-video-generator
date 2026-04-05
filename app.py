@@ -3,7 +3,7 @@ AI Video Generator — Flask Web App
 Features: edge-tts voice, multilingual, on-screen text, auto timing sync
 """
 
-import os, math, random, subprocess, threading, time, uuid, asyncio, re, textwrap
+import os, math, random, subprocess, threading, time, uuid, asyncio, re, textwrap, json
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file, render_template
 from PIL import Image, ImageDraw, ImageFont
@@ -11,9 +11,24 @@ import imageio, numpy as np
 
 app = Flask(__name__)
 
-JOBS = {}
-OUTPUT_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "videos"
+BASE_DIR   = Path(os.path.dirname(os.path.abspath(__file__)))
+OUTPUT_DIR = BASE_DIR / "videos"
+JOBS_DIR   = BASE_DIR / "jobs"
 OUTPUT_DIR.mkdir(exist_ok=True)
+JOBS_DIR.mkdir(exist_ok=True)
+
+# ── Persist job state to disk (survives Render restarts) ──────────────────────
+def job_set(job_id, **data):
+    path = JOBS_DIR / f"{job_id}.json"
+    existing = job_get(job_id) or {}
+    existing.update(data)
+    path.write_text(json.dumps(existing))
+
+def job_get(job_id):
+    path = JOBS_DIR / f"{job_id}.json"
+    if path.exists():
+        return json.loads(path.read_text())
+    return None
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 BG   = (10, 10, 30)
@@ -26,7 +41,7 @@ GRAY = (136, 146, 176)
 CARD = (26, 26, 46)
 SCENE_COLORS = [C1, C4, C2, C3, (179,136,255), (255,138,101), C2, C3, C1, C4]
 
-W, H, FPS = 1280, 720, 24
+W, H, FPS = 854, 480, 20   # 480p @ 20fps — fits Render free 512MB RAM
 
 LANGUAGES = {
     "English (US)":     "en-US-JennyNeural",
@@ -272,7 +287,7 @@ def concat_audio(files, out_file):
 # ── Main video generator ──────────────────────────────────────────────────────
 def generate_video(job_id, topic, script, voice):
     try:
-        JOBS[job_id].update(status='running', message='Generating voiceover...', progress=5)
+        job_set(job_id, status='running', message='Generating voiceover...', progress=5)
 
         silent_path = f"/tmp/{job_id}_silent.mp4"
         out_path    = str(OUTPUT_DIR / f"{job_id}.mp4")
@@ -287,7 +302,7 @@ def generate_video(job_id, topic, script, voice):
             scene['actual_duration'] = max(dur + 0.5, 3.0)  # +0.5s padding
             scene_audios.append(af)
             pct = 5 + int((i+1)/total_scenes * 20)
-            JOBS[job_id].update(progress=pct,
+            job_set(job_id, progress=pct,
                                 message=f'Voice {i+1}/{total_scenes}: {scene["name"]}')
 
         # Concatenate all scene audios
@@ -295,7 +310,7 @@ def generate_video(job_id, topic, script, voice):
         concat_audio(scene_audios, combined_audio)
 
         # ── Step 2: Render video frames ──
-        JOBS[job_id].update(message='Rendering animation...', progress=26)
+        job_set(job_id, message='Rendering animation...', progress=26)
         total_frames = sum(int(s['actual_duration'] * FPS) for s in script)
         particles    = make_particles()
 
@@ -331,13 +346,13 @@ def generate_video(job_id, topic, script, voice):
 
             t_abs += duration
             pct = 26 + int(frame_n / total_frames * 60)
-            JOBS[job_id].update(progress=pct,
+            job_set(job_id, progress=pct,
                                 message=f'Rendering scene {idx+1}/{total_scenes}')
 
         writer.close()
 
         # ── Step 3: Merge audio + video ──
-        JOBS[job_id].update(message='Merging audio + video...', progress=88)
+        job_set(job_id, message='Merging audio + video...', progress=88)
         import imageio_ffmpeg
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         subprocess.run([ffmpeg, '-y',
@@ -347,7 +362,7 @@ def generate_video(job_id, topic, script, voice):
                         '-shortest', out_path],
                        capture_output=True)
 
-        JOBS[job_id].update(status='done', progress=100,
+        job_set(job_id, status='done', progress=100,
                             message='Video ready!', file=out_path)
 
         # Cleanup
@@ -357,7 +372,7 @@ def generate_video(job_id, topic, script, voice):
 
     except Exception as e:
         import traceback
-        JOBS[job_id].update(status='error', message=str(e))
+        job_set(job_id, status='error', message=str(e))
         print(traceback.format_exc())
 
 
@@ -371,7 +386,7 @@ def start_generate():
     data   = request.json
     job_id = str(uuid.uuid4())[:8]
     voice  = LANGUAGES.get(data.get('language','English (US)'), 'en-US-JennyNeural')
-    JOBS[job_id] = {'status':'pending','progress':0,'message':'Queued...','file':None}
+    job_set(job_id, status='pending', progress=0, message='Queued...', file=None)
     threading.Thread(target=generate_video,
                      args=(job_id, data.get('topic','Video'),
                            data.get('script',[]), voice),
@@ -380,15 +395,18 @@ def start_generate():
 
 @app.route('/status/<job_id>')
 def status(job_id):
-    return jsonify(JOBS.get(job_id,
-                   {'status':'error','message':'Not found','progress':0}))
+    job = job_get(job_id)
+    return jsonify(job or {'status':'error','message':'Not found','progress':0})
 
 @app.route('/download/<job_id>')
 def download(job_id):
-    job = JOBS.get(job_id)
+    job = job_get(job_id)
     if not job or not job.get('file'):
         return "Not ready", 404
-    return send_file(job['file'], as_attachment=True,
+    fpath = job['file']
+    if not os.path.exists(fpath):
+        return "File not found", 404
+    return send_file(fpath, as_attachment=True,
                      download_name='ai_video.mp4', mimetype='video/mp4')
 
 if __name__ == '__main__':
