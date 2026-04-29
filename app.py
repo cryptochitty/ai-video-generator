@@ -9,10 +9,13 @@ from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from PIL import Image, ImageDraw, ImageFont
 import imageio, numpy as np
-from eci_scraper import get_tn_results
+from eci_scraper import get_tn_results, start_background_fetcher
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": ["https://tn-election-lyart.vercel.app", "http://localhost:5173"]}})
+
+# Start background ECI scraper once — all user requests are served from cache only
+start_background_fetcher()
 
 BASE_DIR   = Path(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = BASE_DIR / "videos"
@@ -592,12 +595,12 @@ def download(job_id):
 @app.route('/api/tn-results')
 def tn_results():
     """
-    Returns live TN 2026 constituency results.
-    Cached for 10 minutes to avoid hammering ECI servers on counting day.
+    Serves TN 2026 results from in-memory cache — never hits ECI per request.
+    Background thread refreshes cache every 10 minutes.
     """
     try:
-        data = get_tn_results()
-        return jsonify({"ok": True, "results": data, "count": len(data)})
+        data, meta = get_tn_results()
+        return jsonify({"ok": True, "results": data, **meta})
     except Exception as e:
         return jsonify({"ok": False, "results": [], "error": str(e)}), 500
 
