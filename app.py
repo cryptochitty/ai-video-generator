@@ -6,10 +6,13 @@ Interactive motion-graphics style: full-screen text, karaoke highlight, no empty
 import os, math, random, subprocess, threading, uuid, asyncio, re, textwrap, json
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file, render_template
+from flask_cors import CORS
 from PIL import Image, ImageDraw, ImageFont
 import imageio, numpy as np
+from eci_scraper import get_tn_results
 
 app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": ["https://tn-election-lyart.vercel.app", "http://localhost:5173"]}})
 
 BASE_DIR   = Path(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = BASE_DIR / "videos"
@@ -585,6 +588,18 @@ def download(job_id):
         return "File not found", 404
     return send_file(fpath, as_attachment=True,
                      download_name='ai_video.mp4', mimetype='video/mp4')
+
+@app.route('/api/tn-results')
+def tn_results():
+    """
+    Returns live TN 2026 constituency results.
+    Cached for 10 minutes to avoid hammering ECI servers on counting day.
+    """
+    try:
+        data = get_tn_results()
+        return jsonify({"ok": True, "results": data, "count": len(data)})
+    except Exception as e:
+        return jsonify({"ok": False, "results": [], "error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
